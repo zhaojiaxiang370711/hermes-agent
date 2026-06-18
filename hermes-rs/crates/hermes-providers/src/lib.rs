@@ -13,10 +13,12 @@ use std::pin::Pin;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
+pub mod anthropic;
 pub mod openai;
 
 mod sse;
 
+pub use anthropic::Anthropic;
 pub use openai::OpenAiCompat;
 
 /// A streaming chat response: an owned, `Send` stream of token deltas.
