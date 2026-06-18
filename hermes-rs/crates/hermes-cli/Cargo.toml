@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 clap.workspace = true
 anyhow.workspace = true
+hermes-config.workspace = true
 
 [[bin]]
 name = "hermes-rs"
