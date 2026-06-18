@@ -13,6 +13,12 @@ use std::pin::Pin;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 
+pub mod openai;
+
+mod sse;
+
+pub use openai::OpenAiCompat;
+
 /// A streaming chat response: an owned, `Send` stream of token deltas.
 ///
 /// Owned (no borrow on `&self` / `&ChatRequest`) so it can outlive the call and
@@ -111,6 +117,20 @@ pub trait Provider: Send + Sync {
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
     /// Streaming completion; yields token deltas in order.
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError>;
+}
+
+/// Pass a response through on 2xx; otherwise read the body and return a
+/// `Status` error carrying it. Shared by both provider impls.
+pub(crate) async fn ensure_success(
+    resp: reqwest::Response,
+) -> Result<reqwest::Response, ProviderError> {
+    let status = resp.status();
+    if status.is_success() {
+        Ok(resp)
+    } else {
+        let body = resp.text().await.unwrap_or_default();
+        Err(ProviderError::Status { status: status.as_u16(), body })
+    }
 }
 
 #[cfg(test)]
