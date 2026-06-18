@@ -15,11 +15,13 @@ use serde::{Deserialize, Serialize};
 
 pub mod anthropic;
 pub mod openai;
+pub mod resolver;
 
 mod sse;
 
 pub use anthropic::Anthropic;
 pub use openai::OpenAiCompat;
+pub use resolver::resolve;
 
 /// A streaming chat response: an owned, `Send` stream of token deltas.
 ///
@@ -40,6 +42,8 @@ pub enum ProviderError {
     Missing(&'static str),
     #[error("provider requires max_tokens to be set")]
     MaxTokensRequired,
+    #[error("provider configuration error: {0}")]
+    Config(String),
     #[error("stream ended before completion")]
     UnexpectedEof,
 }
