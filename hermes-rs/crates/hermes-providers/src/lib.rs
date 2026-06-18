@@ -15,13 +15,11 @@ use serde::{Deserialize, Serialize};
 
 pub mod anthropic;
 pub mod openai;
-pub mod resolver;
 
 mod sse;
 
 pub use anthropic::Anthropic;
 pub use openai::OpenAiCompat;
-pub use resolver::resolve;
 
 /// A streaming chat response: an owned, `Send` stream of token deltas.
 ///
@@ -42,8 +40,6 @@ pub enum ProviderError {
     Missing(&'static str),
     #[error("provider requires max_tokens to be set")]
     MaxTokensRequired,
-    #[error("provider configuration error: {0}")]
-    Config(String),
     #[error("stream ended before completion")]
     UnexpectedEof,
 }
@@ -205,5 +201,21 @@ mod tests {
             joined.push_str(&delta.unwrap().content);
         }
         assert_eq!(joined, "ab");
+    }
+
+    // Catalog faithfulness: the Phase 0 provider-kinds catalog (specs/) lists
+    // both Phase-1 backends, and this crate implements both behind `Provider`
+    // so the resolver (S6) can produce either.
+    #[test]
+    fn catalog_lists_both_kinds_and_resolver_implements_both() {
+        const CATALOG: &str =
+            include_str!("../../../specs/providers-phase1b.yaml");
+        assert!(CATALOG.contains("openai_compatible"), "catalog must list openai_compatible");
+        assert!(CATALOG.contains("anthropic"), "catalog must list anthropic");
+        assert!(CATALOG.contains("streaming"), "catalog must describe streaming");
+
+        fn is_provider(_: Box<dyn Provider>) {}
+        is_provider(Box::new(crate::OpenAiCompat::new("http://localhost", "k")));
+        is_provider(Box::new(crate::Anthropic::new("http://localhost", "k")));
     }
 }
