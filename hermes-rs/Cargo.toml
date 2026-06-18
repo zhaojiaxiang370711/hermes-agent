@@ -17,9 +17,15 @@ license = "MIT"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 serde_yaml = "0.9"
 anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+bytes = "1"
+async-trait = "0.1"
+futures = "0.3"
 hermes-config = { path = "crates/hermes-config" }
 rusqlite = { version = "0.32", features = ["bundled"] }
