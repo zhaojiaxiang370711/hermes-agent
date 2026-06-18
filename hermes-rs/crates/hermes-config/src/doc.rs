@@ -6,6 +6,12 @@
 
 use std::path::Path;
 
+#[derive(Debug, thiserror::Error)]
+pub enum GetError {
+    #[error("key not found: {0}")]
+    NotFound(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConfigDoc {
     pub(crate) root: serde_yaml::Value,
@@ -25,6 +31,54 @@ impl ConfigDoc {
             return String::new();
         }
         serde_yaml::to_string(&self.root).unwrap_or_default()
+    }
+
+    /// Get a value at a dotted path. Scalars render as their literal string;
+    /// mappings/sequences render as a YAML block (matches `hermes config get`).
+    pub fn get(&self, dotted: &str) -> Result<String, GetError> {
+        let node = self.lookup(dotted)?;
+        Ok(scalar_or_block(node))
+    }
+
+    /// List the string keys under a path (top level if `dotted` is empty).
+    pub fn list(&self, dotted: &str) -> Result<Vec<String>, GetError> {
+        let node = if dotted.is_empty() { &self.root } else { self.lookup(dotted)? };
+        match node {
+            serde_yaml::Value::Mapping(m) => Ok(m
+                .keys()
+                .filter_map(|k| match k {
+                    serde_yaml::Value::String(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect()),
+            _ => Err(GetError::NotFound(dotted.to_string())),
+        }
+    }
+
+    fn lookup(&self, dotted: &str) -> Result<&serde_yaml::Value, GetError> {
+        let mut cursor = &self.root;
+        for (i, part) in dotted.split('.').enumerate() {
+            let so_far = dotted.split('.').take(i + 1).collect::<Vec<_>>().join(".");
+            let key = serde_yaml::Value::String(part.to_string());
+            cursor = match cursor {
+                serde_yaml::Value::Mapping(m) => m.get(&key).ok_or(GetError::NotFound(so_far))?,
+                _ => return Err(GetError::NotFound(so_far)),
+            };
+        }
+        Ok(cursor)
+    }
+}
+
+fn scalar_or_block(v: &serde_yaml::Value) -> String {
+    use serde_yaml::Value;
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::Null => String::new(),
+        other => serde_yaml::to_string(other)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default(),
     }
 }
 
@@ -72,7 +126,6 @@ mod tests {
     fn round_trip_preserves_top_level_order_and_unknowns() {
         let doc = ConfigDoc::from_str(FIXTURE).unwrap();
         let out = doc.to_string();
-        // Top-level key order must be preserved exactly.
         let tops: Vec<&str> = out
             .lines()
             .filter(|l| !l.starts_with(' ') && l.contains(':'))
@@ -92,5 +145,33 @@ mod tests {
     fn empty_is_default() {
         let doc = ConfigDoc::from_str("").unwrap();
         assert_eq!(doc.to_string(), "");
+    }
+
+    #[test]
+    fn get_scalar_nested() {
+        let doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        assert_eq!(doc.get("agent.max_turns").unwrap(), "60");
+        assert_eq!(doc.get("model.provider").unwrap(), "example-provider");
+    }
+
+    #[test]
+    fn get_missing_key_errors() {
+        let doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        let err = doc.get("agent.does_not_exist").unwrap_err();
+        assert!(matches!(err, GetError::NotFound(_)));
+    }
+
+    #[test]
+    fn get_mapping_renders_block() {
+        let doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        let block = doc.get("model").unwrap();
+        assert!(block.contains("default: example-model"));
+    }
+
+    #[test]
+    fn list_top_level_and_nested() {
+        let doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        assert_eq!(doc.list("").unwrap(), vec!["model", "providers", "fallback_providers", "toolsets", "agent"]);
+        assert_eq!(doc.list("agent").unwrap(), vec!["max_turns", "gateway_timeout"]);
     }
 }
