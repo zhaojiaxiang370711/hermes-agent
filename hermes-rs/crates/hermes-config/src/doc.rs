@@ -166,6 +166,18 @@ pub fn save(path: &Path, doc: &ConfigDoc) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Load a config document, returning an empty default only when the file does
+/// not exist. Any other failure (unreadable, corrupt YAML, permission denied)
+/// is propagated — `set` must never silently start from empty and clobber a
+/// broken but present config (Python contract: never silently mutate).
+pub fn load_or_default(path: &Path) -> anyhow::Result<ConfigDoc> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => ConfigDoc::from_str(&text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ConfigDoc::default()),
+        Err(e) => Err(anyhow::anyhow!("reading {}: {e}", path.display())),
+    }
+}
+
 #[cfg(test)]
 const FIXTURE: &str = "\
 model:
@@ -211,6 +223,15 @@ mod tests {
     #[test]
     fn empty_is_default() {
         let doc = ConfigDoc::from_str("").unwrap();
+        assert_eq!(doc.to_string(), "");
+    }
+
+    #[test]
+    fn load_or_default_missing_is_empty() {
+        // NotFound must yield an empty default (so `set` can create the file);
+        // other errors must propagate, not silently default.
+        let p = std::path::Path::new("/this/does/not/exist/anywhere/config.yaml");
+        let doc = load_or_default(p).unwrap();
         assert_eq!(doc.to_string(), "");
     }
 

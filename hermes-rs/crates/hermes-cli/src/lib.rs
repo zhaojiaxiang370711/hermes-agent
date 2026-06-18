@@ -70,7 +70,7 @@ pub fn run_config_at(path: &Path, action: ConfigAction) -> anyhow::Result<()> {
             println!("{val}");
         }
         ConfigAction::Set { key, value } => {
-            let mut doc = hermes_config::load(path).unwrap_or_default();
+            let mut doc = hermes_config::load_or_default(path)?;
             doc.set(&key, &value).map_err(|e| anyhow::anyhow!("{}", e))?;
             hermes_config::save(path, &doc)?;
             println!("set {key} = {value}");
