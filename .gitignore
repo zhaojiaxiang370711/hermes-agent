@@ -31,7 +31,7 @@ test_durations.json
 .pytest-cache/
 tmp/
 temp_vision_images/
-hermes-*/*
+# hermes-*/* removed for the hermes-rs hard fork so hermes-rs/ is tracked
 examples/
 tests/quick_test_dataset.jsonl
 tests/sample_dataset.jsonl
