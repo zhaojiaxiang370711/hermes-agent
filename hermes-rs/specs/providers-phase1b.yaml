@@ -1,0 +1,48 @@
+# Phase 0 catalog: LLM provider call shapes (Phase 1b: 1-shot + streaming)
+# Source: shared config.yaml shape + standard OpenAI/Anthropic HTTP.
+# hermes's providers/ is only a registry; actual calls use the OpenAI/Anthropic
+# Python SDKs from run_agent.py. hermes-rs makes the equivalent HTTP calls with reqwest.
+# Full request-construction fidelity (tool schemas, system-prompt assembly) is Phase 2.
+
+config_shape:   # from ~/.hermes/config.yaml (already readable via hermes-config)
+  model.default: "<model id>"           # e.g. mimo-v2.5-pro
+  model.provider: "<provider key>"      # selects providers.<key>
+  model.base_url: "<override url>"      # optional
+  providers.<key>.name: TEXT
+  providers.<key>.base_url: TEXT        # e.g. http://qxtech.xyz:3001/v1
+  providers.<key>.key_env: TEXT         # env var name holding the API key, e.g. QXTECH_API_KEY
+  providers.<key>.default_model: TEXT
+  providers.<key>.model: TEXT
+api_key_source: "~/.hermes/.env  (KEY=value lines; look up the name in <key>.key_env)"
+
+provider_kinds:
+  openai_compatible:
+    detect: "base_url ends with /v1 or endpoint is /chat/completions; non-anthropic providers"
+    request:
+      method: POST
+      path: "{base_url}/chat/completions"
+      headers: { Authorization: "Bearer {api_key}", Content-Type: "application/json" }
+      body: { model, messages: [{role, content}], stream: true|false }
+      # Phase 2 adds: tools[], tool_choice, temperature, max_tokens, response_format
+    streaming: "SSE; lines 'data: {json}'; terminate on 'data: [DONE]'; deltas in choices[].delta.content"
+    non_streaming: "choices[0].message.content ; usage.{prompt_tokens,completion_tokens}"
+  anthropic:
+    detect: "provider is anthropic / base_url host api.anthropic.com"
+    request:
+      method: POST
+      path: "{base_url}/v1/messages"
+      headers:
+        x-api-key: "{api_key}"
+        anthropic-version: "2023-06-01"
+        Content-Type: "application/json"
+      body: { model, max_tokens, messages: [{role, content}], stream: true|false, system: "<optional top-level>" }
+    streaming: "SSE events: message_start, content_block_delta (delta.text), message_stop; usage in message_delta"
+    non_streaming: "content[0].text ; usage.{input_tokens,output_tokens}"
+
+# Phase 1b deliverable (per spec done-criteria):
+phase1b:
+  - "Provider trait: async fn complete(req) -> resp ; async fn stream(req) -> Stream of token deltas"
+  - "OpenAI-compatible impl: 1-shot + SSE streaming parse"
+  - "Anthropic impl: 1-shot + SSE streaming parse"
+  - "Config + .env wiring (base_url, key_env -> key)"
+testing: "Mock HTTP (wiremock) for deterministic request-construction + SSE-parse tests. No real API calls in tests. Live smoke against the configured provider is manual/optional."

@@ -1,0 +1,77 @@
+# Phase 0 catalog: SQLite state schema (hermes_state.SessionDB)
+# Source: introspected ~/.hermes/state.db (read-only PRAGMA), 2026-06-18.
+# Phase 1b reads sessions (count + summary). Full write fidelity is Phase 2.
+
+db_path: "<HERMES_HOME>/state.db"   # i.e. ~/.hermes/state.db ; WAL mode (-shm/-wal sidecars)
+journal_mode: wal
+schema_version_table: schema_version   # version INTEGER
+
+tables:
+  sessions:   # pk=id (TEXT). 15 rows in the reference DB.
+    columns:
+      id: TEXT              # session id (primary key)
+      source: TEXT          # e.g. cli / gateway
+      user_id: TEXT
+      model: TEXT
+      model_config: TEXT    # JSON blob
+      system_prompt: TEXT
+      parent_session_id: TEXT
+      started_at: REAL      # epoch seconds (notnull)
+      ended_at: REAL
+      end_reason: TEXT
+      message_count: INTEGER
+      tool_call_count: INTEGER
+      input_tokens: INTEGER
+      output_tokens: INTEGER
+      cache_read_tokens: INTEGER
+      cache_write_tokens: INTEGER
+      reasoning_tokens: INTEGER
+      billing_provider: TEXT
+      billing_base_url: TEXT
+      billing_mode: TEXT
+      estimated_cost_usd: REAL
+      actual_cost_usd: REAL
+      cost_status: TEXT
+      cost_source: TEXT
+      pricing_version: TEXT
+      title: TEXT
+      api_call_count: INTEGER
+      handoff_state: TEXT
+      handoff_platform: TEXT
+      handoff_error: TEXT
+    indexes:
+      - idx_sessions_source
+      - idx_sessions_parent
+      - idx_sessions_started
+      - idx_sessions_title_unique   # title UNIQUE
+  messages:   # pk=id (INTEGER autoincrement). FK-ish: session_id.
+    columns:
+      id: INTEGER
+      session_id: TEXT
+      role: TEXT          # system/user/assistant/tool
+      content: TEXT
+      tool_call_id: TEXT
+      tool_calls: TEXT    # JSON
+      tool_name: TEXT
+      timestamp: REAL
+      token_count: INTEGER
+      finish_reason: TEXT
+      reasoning: TEXT
+      reasoning_content: TEXT
+      reasoning_details: TEXT
+      codex_reasoning_items: TEXT
+      codex_message_items: TEXT
+      platform_message_id: TEXT
+      observed: INTEGER
+    indexes:
+      - idx_messages_session
+      - idx_messages_platform_msg_id
+  state_meta: { key: TEXT (pk), value: TEXT }
+  messages_fts: { kind: fts5, notes: "FTS5 virtual table over messages.content; shadow tables messages_fts_{config,content,data,docsize,idx}. Managed by SQLite — do not write manually." }
+  messages_fts_trigram: { kind: fts5, notes: "trigram FTS5 shadow set; same caveat." }
+
+# Phase 1b reads only:
+phase1b_reads:
+  - "SELECT COUNT(*) FROM sessions"
+  - "SELECT id, model, started_at, message_count, title FROM sessions ORDER BY started_at DESC"
+compatibility: "Open the existing file read-only via rusqlite (bundled). Reuse schema verbatim — never create/mutate tables in Phase 1b."

@@ -34,6 +34,11 @@ pub fn env_path() -> anyhow::Result<PathBuf> {
     Ok(hermes_home()?.join(".env"))
 }
 
+/// `<HERMES_HOME>/state.db`
+pub fn state_db_path() -> anyhow::Result<PathBuf> {
+    Ok(hermes_home()?.join("state.db"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,9 +64,10 @@ mod tests {
     }
 
     #[test]
-    fn config_and_env_paths() {
+    fn config_env_and_state_paths() {
         let home = resolve_hermes_home(Some(Path::new("/tmp/xx")), None).unwrap();
         assert_eq!(home.join("config.yaml"), PathBuf::from("/tmp/xx/config.yaml"));
         assert_eq!(home.join(".env"), PathBuf::from("/tmp/xx/.env"));
+        assert_eq!(home.join("state.db"), PathBuf::from("/tmp/xx/state.db"));
     }
 }
