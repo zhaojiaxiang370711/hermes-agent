@@ -15,6 +15,7 @@ tokio.workspace = true
 reqwest.workspace = true
 bytes.workspace = true
 futures.workspace = true
+hermes-config.workspace = true
 
 [dev-dependencies]
 wiremock = "0.6"
