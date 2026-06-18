@@ -12,6 +12,12 @@ pub enum GetError {
     NotFound(String),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SetError {
+    #[error("cannot set into non-mapping node at: {0}")]
+    NotMapping(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConfigDoc {
     pub(crate) root: serde_yaml::Value,
@@ -55,6 +61,14 @@ impl ConfigDoc {
         }
     }
 
+    /// Set a value at a dotted path, creating intermediate mappings as needed.
+    /// Scalar strings are parsed to bool/int/float when they look like one
+    /// (mirrors how the Python config writer stores typed values).
+    pub fn set(&mut self, dotted: &str, value: &str) -> Result<(), SetError> {
+        let parts: Vec<&str> = dotted.split('.').collect();
+        set_recursive(&mut self.root, &parts, parse_scalar(value))
+    }
+
     fn lookup(&self, dotted: &str) -> Result<&serde_yaml::Value, GetError> {
         let mut cursor = &self.root;
         for (i, part) in dotted.split('.').enumerate() {
@@ -82,6 +96,58 @@ fn scalar_or_block(v: &serde_yaml::Value) -> String {
     }
 }
 
+fn set_recursive(
+    node: &mut serde_yaml::Value,
+    parts: &[&str],
+    value: serde_yaml::Value,
+) -> Result<(), SetError> {
+    let map = ensure_mapping(node)?;
+    let key = serde_yaml::Value::String(parts[0].to_string());
+    if parts.len() == 1 {
+        map.insert(key, value);
+        return Ok(());
+    }
+    if map.get(&key).is_none() {
+        map.insert(key.clone(), serde_yaml::Value::Mapping(Default::default()));
+    }
+    let child = map.get_mut(&key).expect("just inserted");
+    if !matches!(child, serde_yaml::Value::Mapping(_)) {
+        *child = serde_yaml::Value::Mapping(Default::default());
+    }
+    set_recursive(child, &parts[1..], value)
+}
+
+fn ensure_mapping(node: &mut serde_yaml::Value) -> Result<&mut serde_yaml::Mapping, SetError> {
+    match node {
+        serde_yaml::Value::Mapping(m) => Ok(m),
+        serde_yaml::Value::Null => {
+            *node = serde_yaml::Value::Mapping(Default::default());
+            match node {
+                serde_yaml::Value::Mapping(m) => Ok(m),
+                _ => unreachable!(),
+            }
+        }
+        _ => Err(SetError::NotMapping("root".into())),
+    }
+}
+
+fn parse_scalar(s: &str) -> serde_yaml::Value {
+    use serde_yaml::Value;
+    match s {
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        "null" | "~" => return Value::Null,
+        _ => {}
+    }
+    if let Ok(n) = s.parse::<i64>() {
+        return Value::from(n);
+    }
+    if let Ok(n) = s.parse::<f64>() {
+        return Value::from(n);
+    }
+    Value::from(s)
+}
+
 /// Load a config document from disk.
 pub fn load(path: &Path) -> anyhow::Result<ConfigDoc> {
     let text = std::fs::read_to_string(path)
@@ -100,6 +166,7 @@ pub fn save(path: &Path, doc: &ConfigDoc) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 const FIXTURE: &str = "\
 model:
   default: example-model
@@ -173,5 +240,43 @@ mod tests {
         let doc = ConfigDoc::from_str(FIXTURE).unwrap();
         assert_eq!(doc.list("").unwrap(), vec!["model", "providers", "fallback_providers", "toolsets", "agent"]);
         assert_eq!(doc.list("agent").unwrap(), vec!["max_turns", "gateway_timeout"]);
+    }
+
+    #[test]
+    fn set_existing_scalar() {
+        let mut doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        doc.set("agent.max_turns", "30").unwrap();
+        assert_eq!(doc.get("agent.max_turns").unwrap(), "30");
+        assert_eq!(doc.get("agent.gateway_timeout").unwrap(), "1800");
+    }
+
+    #[test]
+    fn set_creates_nested_path() {
+        let mut doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        doc.set("agent.new.deep.key", "yes").unwrap();
+        assert_eq!(doc.get("agent.new.deep.key").unwrap(), "yes");
+    }
+
+    #[test]
+    fn set_parses_scalars() {
+        let mut doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        doc.set("agent.max_turns", "30").unwrap();
+        let out = doc.to_string();
+        assert!(out.contains("max_turns: 30"));
+        doc.set("agent.flag", "true").unwrap();
+        assert!(doc.to_string().contains("flag: true"));
+    }
+
+    #[test]
+    fn set_preserves_top_level_order() {
+        let mut doc = ConfigDoc::from_str(FIXTURE).unwrap();
+        doc.set("agent.max_turns", "30").unwrap();
+        let out = doc.to_string();
+        let tops: Vec<&str> = out
+            .lines()
+            .filter(|l| !l.starts_with(' ') && l.contains(':'))
+            .map(|l| l.split(':').next().unwrap())
+            .collect();
+        assert_eq!(tops, vec!["model", "providers", "fallback_providers", "toolsets", "agent"]);
     }
 }
