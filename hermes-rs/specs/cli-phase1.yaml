@@ -1,0 +1,21 @@
+# Phase 1 CLI surface for hermes-rs, mirroring hermes_cli/main.py.
+# Sources: _BUILTIN_SUBCOMMANDS (line ~11073) and _AGENT_COMMANDS = {None, "chat", ...}.
+# No subcommand => chat (main.py line ~11336).
+binary: hermes-rs
+global_flags:
+  - { name: "--model",    arg: string, purpose: "override model id" }
+  - { name: "--provider", arg: string, purpose: "override provider key" }
+  - { name: "--help",     arg: none,   purpose: "print help" }
+  - { name: "--version",  arg: none,   purpose: "print version" }
+commands:
+  - name: chat          # default when omitted
+    args: [prompt...]
+    status: stub        # Phase 1b implements the agent loop
+  - name: config
+    subcommands:
+      - { name: get,  args: [key] }
+      - { name: set,  args: [key, value] }
+      - { name: list, args: [key?] }
+    status: implemented
+  - name: model
+    status: stub        # Phase 1b
