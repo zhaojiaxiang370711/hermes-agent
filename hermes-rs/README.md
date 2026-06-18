@@ -3,12 +3,15 @@
 Faithful Rust port of the Hermes agent **core**, staged per
 `docs/superpowers/specs/2026-06-18-hermes-rs-core-rewrite-design.md`.
 
-**Phase 1a (this code):** workspace scaffold + config interop.
+**Phase 1a + 1b (this code):** workspace scaffold, config interop, shared
+state read, and Phase-1 LLM providers.
 
 ## Layout
-- `crates/hermes-config` — `~/.hermes/config.yaml` read/write (order- and unknown-key-preserving)
+- `crates/hermes-config` — `~/.hermes/config.yaml` read/write (order- and unknown-key-preserving) + `.env` key reader + `state_db_path()`
+- `crates/hermes-state` — reads the shared `~/.hermes/state.db` (sessions, read-only)
+- `crates/hermes-providers` — `Provider` trait + OpenAI-compatible + Anthropic clients (1-shot + SSE), config/.env resolver
 - `crates/hermes-cli` — `hermes-rs` binary
-- `crates/hermes-{state,providers,tools,core}` — stubs (Phase 1b)
+- `crates/hermes-{tools,core}` — stubs (Phase 2)
 
 ## Build & run
 ```
@@ -25,7 +28,14 @@ Config path mirrors the Python original: `$HERMES_HOME` if set, else `$HOME/.her
 ```
 cargo test
 ```
+Provider tests use `wiremock` for deterministic request-construction + SSE-parse
+checks — **no real API calls**. Live reads of `state.db` and live provider
+round-trips are manual smoke only.
 
 ## Status
 - `config get/set/list`: implemented, round-trips the real config.
-- `chat`, `model`: stubs — implemented in Phase 1b (agent loop + providers).
+- `state`: read-only over the shared `~/.hermes/state.db` (session count + summaries).
+- `providers`: OpenAI-compatible (`{base_url}/chat/completions`) + Anthropic
+  (`{base_url}/v1/messages`) — 1-shot `complete` and SSE `stream`. API keys
+  resolved from `providers.<k>.key_env` → `~/.hermes/.env`.
+- `chat`, `model`: stubs — Phase 2 (agent loop + default tools + state writes).
