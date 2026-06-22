@@ -72,12 +72,21 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub max_tokens: Option<u32>,
     pub stream: bool,
+    pub tools: Vec<ToolDef>,
 }
 
 impl ChatRequest {
     pub fn new(model: impl Into<String>, messages: Vec<ChatMessage>) -> Self {
-        Self { model: model.into(), messages, max_tokens: None, stream: false }
+        Self { model: model.into(), messages, max_tokens: None, stream: false, tools: vec![] }
     }
+}
+
+/// 发给模型的工具定义（provider 无关）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDef {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value, // JSON Schema
 }
 
 /// Token-usage accounting, normalized across providers.
@@ -102,6 +111,7 @@ impl Usage {
 pub struct ChatResponse {
     pub content: String,
     pub usage: Usage,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 /// 从响应解析出的工具调用。arguments 为模型原样的 JSON 串（不在本层解析）。
@@ -184,7 +194,7 @@ mod tests {
         #[async_trait::async_trait]
         impl Provider for Dummy {
             async fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
-                Ok(ChatResponse { content: "ok".into(), usage: Usage::new(1, 2) })
+                Ok(ChatResponse { content: "ok".into(), usage: Usage::new(1, 2), tool_calls: vec![] })
             }
             async fn stream(&self, _req: &ChatRequest) -> Result<ChatStream, ProviderError> {
                 let s = futures::stream::iter(vec![

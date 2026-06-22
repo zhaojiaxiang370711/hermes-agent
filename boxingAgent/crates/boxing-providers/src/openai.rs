@@ -1,11 +1,11 @@
 //! OpenAI-compatible chat completions provider.
 //!
-//! Hits `{base_url}/chat/completions` — the shape used by OpenAI and any
-//! OpenAI-compatible gateway (e.g. a `.../v1` endpoint). Non-stream returns
-//! `choices[0].message.content` + `usage`; streaming is SSE with `data: {json}`
-//! lines terminated by `data: [DONE]`, token deltas in
-//! `choices[0].delta.content`.
+//! Hits `{base_url}/chat/completions`. Non-stream: `choices[0].message.content`
+//! + `tool_calls` + `usage`; streaming: SSE `data:` lines — 文本走
+//! `delta.content`，工具调用按 index 累积 `delta.tool_calls`，`[DONE]` 时
+//! 发 `StreamEvent::ToolCall`。
 
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::sse::SseLineStream;
 use crate::{
     ensure_success, ChatMessage, ChatRequest, ChatResponse, ChatStream, Provider, ProviderError,
-    StreamEvent, Usage,
+    StreamEvent, ToolCall, ToolDef, Usage,
 };
 
 #[derive(Clone)]
@@ -53,11 +53,13 @@ impl OpenAiCompat {
 #[async_trait::async_trait]
 impl Provider for OpenAiCompat {
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+        let tools = openai_tools(req);
         let body = OpenAiBody {
             model: &req.model,
             messages: &req.messages,
             max_tokens: req.max_tokens,
             stream: false,
+            tools,
         };
         let resp = self
             .client
@@ -68,12 +70,18 @@ impl Provider for OpenAiCompat {
             .await?;
         let resp = ensure_success(resp).await?;
         let parsed: OpenAiResponse = resp.json().await?;
-        let content = parsed
-            .choices
-            .first()
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.content.clone())
-            .ok_or(ProviderError::Missing("choices[0].message.content"))?;
+        let msg = parsed.choices.first().and_then(|c| c.message.as_ref());
+        let content = msg.and_then(|m| m.content.clone()).unwrap_or_default();
+        let tool_calls = msg
+            .and_then(|m| m.tool_calls.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tc| ToolCall {
+                id: tc.id,
+                name: tc.function.name,
+                arguments: tc.function.arguments,
+            })
+            .collect();
         let usage = parsed
             .usage
             .map(|u| Usage {
@@ -81,15 +89,17 @@ impl Provider for OpenAiCompat {
                 output_tokens: u.completion_tokens,
             })
             .unwrap_or_default();
-        Ok(ChatResponse { content, usage })
+        Ok(ChatResponse { content, usage, tool_calls })
     }
 
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
+        let tools = openai_tools(req);
         let body = OpenAiBody {
             model: &req.model,
             messages: &req.messages,
             max_tokens: req.max_tokens,
             stream: true,
+            tools,
         };
         let resp = self
             .client
@@ -100,9 +110,21 @@ impl Provider for OpenAiCompat {
             .await?;
         let resp = ensure_success(resp).await?;
         let bytes = resp.bytes_stream();
-        let deltas = OpenAiDeltaStream { lines: SseLineStream::new(bytes) };
+        let deltas = OpenAiDeltaStream {
+            lines: SseLineStream::new(bytes),
+            accum: Vec::new(),
+            pending: VecDeque::new(),
+        };
         Ok(Box::pin(deltas))
     }
+}
+
+/// 从 `ChatRequest.tools` 构建 OpenAI tools 字段（function 包装）。
+fn openai_tools(req: &ChatRequest) -> Vec<OpenAiTool<'_>> {
+    req.tools
+        .iter()
+        .map(|t| OpenAiTool { kind: "function", function: t })
+        .collect()
 }
 
 /// Wire body for `/chat/completions`.
@@ -113,12 +135,41 @@ struct OpenAiBody<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiTool<'a>>,
+}
+
+#[derive(Serialize)]
+struct OpenAiTool<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str, // "function"
+    function: &'a ToolDef,
+}
+
+#[derive(Deserialize, Clone, Default)]
+struct OpenAiFunction {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    arguments: String,
+}
+
+#[derive(Deserialize, Clone)]
+struct OpenAiToolCall {
+    #[serde(default)]
+    index: u32,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    function: OpenAiFunction,
 }
 
 #[derive(Deserialize)]
 struct OpenAiContent {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<OpenAiToolCall>>,
 }
 
 #[derive(Deserialize)]
@@ -145,41 +196,92 @@ struct OpenAiResponse {
     usage: Option<OpenAiUsage>,
 }
 
-/// Parses the SSE line stream into token deltas: emits `choices[0].delta.content`
-/// (skipping empty/role chunks) and terminates on `data: [DONE]`.
+/// 按 index 累积的工具调用。
+struct ToolCallAccum {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// 解析 SSE 行流：发 `StreamEvent::Text`（delta.content），按 index 累积
+/// `delta.tool_calls`，`[DONE]` 或流结束时发 `StreamEvent::ToolCall`。
 struct OpenAiDeltaStream<S: Unpin> {
     lines: SseLineStream<S>,
+    accum: Vec<ToolCallAccum>,
+    pending: VecDeque<ToolCall>,
 }
 
 impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for OpenAiDeltaStream<S> {
     type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let me = &mut *self;
         loop {
-            match Pin::new(&mut self.lines).poll_next(cx) {
+            // 先发 [DONE] 后入队的 tool_call
+            if let Some(tc) = me.pending.pop_front() {
+                return Poll::Ready(Some(Ok(StreamEvent::ToolCall(tc))));
+            }
+            match Pin::new(&mut me.lines).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    flush_accum(me);
+                    if me.pending.is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    continue;
+                }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(Some(Ok(payload))) => {
                     if payload == "[DONE]" {
-                        return Poll::Ready(None);
+                        flush_accum(me);
+                        continue;
                     }
                     let chunk: OpenAiResponse = match serde_json::from_str(&payload) {
                         Ok(c) => c,
                         Err(e) => return Poll::Ready(Some(Err(ProviderError::Decode(e)))),
                     };
-                    let text = chunk
-                        .choices
-                        .first()
-                        .and_then(|c| c.delta.as_ref())
-                        .and_then(|d| d.content.clone());
-                    match text {
-                        Some(t) if !t.is_empty() => return Poll::Ready(Some(Ok(StreamEvent::Text(t)))),
-                        _ => continue,
+                    if let Some(choice) = chunk.choices.first() {
+                        if let Some(d) = choice.delta.as_ref() {
+                            // 文本
+                            if let Some(t) = d.content.as_ref() {
+                                if !t.is_empty() {
+                                    return Poll::Ready(Some(Ok(StreamEvent::Text(t.clone()))));
+                                }
+                            }
+                            // tool_call 累积（按 index）
+                            if let Some(tcs) = d.tool_calls.as_ref() {
+                                for tc in tcs {
+                                    let idx = tc.index as usize;
+                                    while me.accum.len() <= idx {
+                                        me.accum.push(ToolCallAccum {
+                                            id: String::new(),
+                                            name: String::new(),
+                                            arguments: String::new(),
+                                        });
+                                    }
+                                    let a = &mut me.accum[idx];
+                                    if !tc.id.is_empty() {
+                                        a.id = tc.id.clone();
+                                    }
+                                    if !tc.function.name.is_empty() {
+                                        a.name = tc.function.name.clone();
+                                    }
+                                    a.arguments.push_str(&tc.function.arguments);
+                                }
+                            }
+                        }
                     }
+                    continue;
                 }
             }
         }
+    }
+}
+
+/// 把累积的 tool_call 移入 pending 待发。
+fn flush_accum<S: Unpin>(me: &mut OpenAiDeltaStream<S>) {
+    for a in me.accum.drain(..) {
+        me.pending.push_back(ToolCall { id: a.id, name: a.name, arguments: a.arguments });
     }
 }
 
@@ -214,6 +316,38 @@ mod tests {
         assert_eq!(resp.content, "hello there");
         assert_eq!(resp.usage.input_tokens, Some(5));
         assert_eq!(resp.usage.output_tokens, Some(3));
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_parses_tool_calls_and_sends_tools() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("authorization", "Bearer k"))
+            .and(body_string_contains("\"tools\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": null, "tool_calls": [
+                    {"id": "call_1", "type": "function",
+                     "function": {"name": "read", "arguments": "{\"path\":\"a.rs\"}"}}
+                ]}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3}
+            })))
+            .mount(&server)
+            .await;
+
+        let p = OpenAiCompat::new(server.uri(), "k");
+        let mut r = req();
+        r.tools.push(ToolDef {
+            name: "read".into(),
+            description: "read a file".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        });
+        let resp = p.complete(&r).await.unwrap();
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "call_1");
+        assert_eq!(resp.tool_calls[0].name, "read");
+        assert_eq!(resp.tool_calls[0].arguments, "{\"path\":\"a.rs\"}");
     }
 
     #[tokio::test]
@@ -262,5 +396,35 @@ mod tests {
             }
         }
         assert_eq!(out, "Hello");
+    }
+
+    #[tokio::test]
+    async fn stream_yields_tool_call_event() {
+        let server = MockServer::start().await;
+        // 工具调用的 arguments 分两片到达；[DONE] 后发一个 ToolCall。
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"a\"}}]}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\".rs\\\"}\"}}]}}]}\n\n",
+            "data: [DONE]\n\n",
+        )
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"))
+            .mount(&server)
+            .await;
+
+        let p = OpenAiCompat::new(server.uri(), "k");
+        let mut s = p.stream(&req()).await.unwrap();
+        let mut tool_calls = Vec::new();
+        while let Some(ev) = s.next().await {
+            if let StreamEvent::ToolCall(tc) = ev.unwrap() {
+                tool_calls.push(tc);
+            }
+        }
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call_1");
+        assert_eq!(tool_calls[0].name, "read");
+        assert_eq!(tool_calls[0].arguments, "{\"path\":\"a.rs\"}");
     }
 }

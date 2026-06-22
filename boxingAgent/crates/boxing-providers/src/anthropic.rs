@@ -79,7 +79,7 @@ impl Provider for Anthropic {
             .usage
             .map(|u| Usage { input_tokens: u.input_tokens, output_tokens: u.output_tokens })
             .unwrap_or_default();
-        Ok(ChatResponse { content, usage })
+        Ok(ChatResponse { content, usage, tool_calls: vec![] })
     }
 
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
