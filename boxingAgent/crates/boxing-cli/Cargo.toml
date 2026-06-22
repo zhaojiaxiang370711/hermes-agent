@@ -9,6 +9,9 @@ license.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 boxing-config.workspace = true
+boxing-providers.workspace = true
+boxing-core.workspace = true
+tokio.workspace = true
 
 [[bin]]
 name = "boxing-agent"

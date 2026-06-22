@@ -1,6 +1,7 @@
 use clap::Parser;
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = boxing_cli::Cli::parse();
-    boxing_cli::run(cli)
+    boxing_cli::run(cli).await
 }

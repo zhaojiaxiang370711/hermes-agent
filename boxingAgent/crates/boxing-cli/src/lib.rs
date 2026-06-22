@@ -16,6 +16,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub provider: Option<String>,
 
+    /// Override the system prompt.
+    #[arg(long, global = true)]
+    pub system: Option<String>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -46,18 +50,64 @@ pub enum ConfigAction {
     List { key: Option<String> },
 }
 
+/// Minimal built-in system prompt (overridable via `--system`).
+const DEFAULT_SYSTEM: &str = "You are boxingAgent, a helpful assistant.";
+
+/// Resolve the configured provider, build an Agent, stream one turn to stdout.
+async fn run_chat(
+    model: Option<String>,
+    system: Option<String>,
+    prompt: Vec<String>,
+) -> anyhow::Result<()> {
+    let message = prompt.join(" ");
+    if message.trim().is_empty() {
+        anyhow::bail!("no prompt: provide a message, e.g. `boxing-agent chat \"hello\"`");
+    }
+
+    let config_path = boxing_config::config_path()?;
+    let env_path = boxing_config::env_path()?;
+    let config = boxing_config::load(&config_path)?;
+
+    let provider = boxing_providers::resolve(&config, &env_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    let model = match model {
+        Some(m) => m,
+        None => config
+            .get("model.default")
+            .map_err(|e| anyhow::anyhow!("model.default: {e}"))?,
+    };
+    let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
+
+    let agent = boxing_core::Agent::new(provider, model, system);
+    agent
+        .run(&message, &mut |delta| print!("{delta}"))
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    println!();
+    Ok(())
+}
+
 /// Entry point dispatched from `main`.
-pub fn run(cli: Cli) -> anyhow::Result<()> {
-    match cli.command {
-        None | Some(Command::Chat { .. }) => {
-            eprintln!("boxing-agent: agent chat loop is implemented in Phase 1b.");
-            Ok(())
-        }
+pub async fn run(cli: Cli) -> anyhow::Result<()> {
+    // Destructure up front so the chat arm can use model/system without a
+    // partial-move on cli.command. `..` skips `provider` (the global --provider
+    // flag stays a no-op this slice; the loop uses config's model.provider).
+    let Cli { model, system, command, .. } = cli;
+    match command {
+        // Bare `boxing-agent` (no subcommand) enters chat with no prompt,
+        // which run_chat rejects with a helpful message. (A bare positional
+        // message like `boxing-agent "hi"` isn't supported by this clap tree —
+        // use `boxing-agent chat "hi"`.)
+        None => run_chat(model, system, Vec::new()).await,
+        Some(Command::Chat { prompt }) => run_chat(model, system, prompt).await,
         Some(Command::Model) => {
-            eprintln!("boxing-agent: model selection is implemented in Phase 1b.");
+            eprintln!("boxing-agent: model selection is implemented in a later phase.");
             Ok(())
         }
-        Some(Command::Config { action }) => run_config_at(&boxing_config::config_path()?, action),
+        Some(Command::Config { action }) => {
+            run_config_at(&boxing_config::config_path()?, action)
+        }
     }
 }
 
@@ -114,5 +164,18 @@ mod tests {
     #[test]
     fn unknown_command_rejected() {
         assert!(Cli::try_parse_from(["boxing-agent", "dashboard"]).is_err());
+    }
+
+    #[test]
+    fn chat_system_and_prompt_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "boxing-agent", "chat", "--system", "be brief", "do", "the", "thing",
+        ])
+        .unwrap();
+        assert_eq!(cli.system.as_deref(), Some("be brief"));
+        let Command::Chat { prompt } = cli.command.expect("chat command") else {
+            panic!("expected Chat");
+        };
+        assert_eq!(prompt, vec!["do", "the", "thing"]);
     }
 }
