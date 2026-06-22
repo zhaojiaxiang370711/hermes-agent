@@ -11,7 +11,8 @@ state read, and Phase-1 LLM providers.
 - `crates/boxing-state` — reads the shared `~/.hermes/state.db` (sessions, read-only)
 - `crates/boxing-providers` — `Provider` trait + OpenAI-compatible + Anthropic clients (1-shot + SSE), config/.env resolver
 - `crates/boxing-cli` — `boxing-agent` binary
-- `crates/boxing-{tools,core}` — stubs (Phase 2)
+- `crates/boxing-core` — agent loop (Phase 2d: single text-only streaming turn)
+- `crates/boxing-tools` — default coding toolset: read/write/edit/bash/grep/glob/ls (Phase 2a)
 
 ## Build & run
 ```
@@ -38,4 +39,5 @@ round-trips are manual smoke only.
 - `providers`: OpenAI-compatible (`{base_url}/chat/completions`) + Anthropic
   (`{base_url}/v1/messages`) — 1-shot `complete` and SSE `stream`. API keys
   resolved from `providers.<k>.key_env` → `~/.hermes/.env`.
-- `chat`, `model`: stubs — Phase 2 (agent loop + default tools + state writes).
+- `tools`: default toolset implemented (read/write/edit/bash/grep/glob/ls); not yet wired into the loop (2c/2d).
+- `chat`, `model`: `chat` streams a single text-only turn (Phase 2d slice 1); tools/state-writes/tool-using loop pending.

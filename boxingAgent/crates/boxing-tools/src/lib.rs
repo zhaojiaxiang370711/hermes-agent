@@ -22,6 +22,19 @@ pub use ls::Ls;
 pub use read::Read;
 pub use write::Write;
 
+/// 返回全部 7 个默认工具（Phase 2a 精简集）。
+pub fn default_tools() -> Vec<Box<dyn Tool>> {
+    vec![
+        Box::new(Read),
+        Box::new(Write),
+        Box::new(Edit),
+        Box::new(Bash),
+        Box::new(Grep),
+        Box::new(Glob),
+        Box::new(Ls),
+    ]
+}
+
 /// 工具错误类型；所有工具的 exec 统一返回 `Result<String, ToolError>`。
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -99,5 +112,22 @@ mod tests {
         let t: Box<dyn Tool> = Box::new(Dummy);
         assert_eq!(t.name(), "dummy");
         assert_eq!(t.exec(json!({})).await.unwrap(), "ok");
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    /// 实现的工具集必须恰好是 catalog 中的 7 个，名字一致。
+    #[test]
+    fn default_tools_match_catalog() {
+        const CATALOG: &str = include_str!("../../../specs/tools-phase2a.yaml");
+        let names: Vec<&str> = default_tools().iter().map(|t| t.name()).collect();
+        let expected = ["read", "write", "edit", "bash", "grep", "glob", "ls"];
+        assert_eq!(names.as_slice(), expected);
+        for n in expected {
+            assert!(CATALOG.contains(&format!("- name: {n}")), "catalog 缺少工具 {n}");
+        }
     }
 }

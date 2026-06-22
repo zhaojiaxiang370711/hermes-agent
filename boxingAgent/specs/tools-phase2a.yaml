@@ -1,0 +1,33 @@
+# Phase 0 catalog: boxingAgent 默认工具集（Phase 2a）。
+# 精简的 7 个编码工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
+# 每个工具：name / params / return / side effects。实现以此为准。
+
+tools:
+  - name: read
+    params: [path, offset?, limit?]
+    return: "带行号的行（cat -n 风格）"
+    side_effects: none
+  - name: write
+    params: [path, content]
+    return: "已写入 N 字节"
+    side_effects: "创建/覆盖文件，自动建父目录"
+  - name: edit
+    params: [path, old_string, new_string]
+    return: "已编辑 <path>"
+    side_effects: "修改文件（唯一匹配替换）"
+  - name: bash
+    params: [command, timeout?]
+    return: "stdout + stderr + exit: N"
+    side_effects: "在 cwd 用 sh -c 执行命令；默认 120s 超时"
+  - name: grep
+    params: [pattern, path?, include?, output_mode?, context?]
+    return: "content|files_only|count 模式结果"
+    side_effects: none
+  - name: glob
+    params: [pattern, path?]
+    return: "匹配路径（mtime 倒序）"
+    side_effects: none
+  - name: ls
+    params: [path?, recursive?]
+    return: "目录条目（目录后缀 /）"
+    side_effects: none
