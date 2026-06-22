@@ -54,6 +54,24 @@ pub enum ConfigAction {
 /// Minimal built-in system prompt (overridable via `--system`).
 const DEFAULT_SYSTEM: &str = "You are boxingAgent, a helpful assistant.";
 
+/// 构建完整工具集：默认工具 + delegate_task（子代理委托）。
+fn agent_tools(
+    provider: Arc<dyn boxing_providers::Provider>,
+    model: &str,
+    system: &str,
+    max_turns: usize,
+) -> Vec<Box<dyn boxing_tools::Tool>> {
+    let mut tools = boxing_tools::default_tools();
+    tools.push(Box::new(boxing_core::Delegate::new(
+        provider,
+        model.to_string(),
+        system.to_string(),
+        max_turns,
+        0, // depth
+    )));
+    tools
+}
+
 /// Resolve the configured provider, build an Agent, stream one turn to stdout.
 async fn run_chat(
     model: Option<String>,
@@ -82,12 +100,12 @@ async fn run_chat(
     };
     let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
 
-    let tools = boxing_tools::default_tools();
     let max_turns = config
         .get("agent.max_turns")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(30);
+    let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns);
     let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns);
     match boxing_state::SessionStore::open(&boxing_config::state_db_path()?) {
         Ok(store) => {
