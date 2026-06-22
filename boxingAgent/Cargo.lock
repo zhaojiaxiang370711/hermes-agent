@@ -193,6 +193,7 @@ dependencies = [
  "glob",
  "ignore",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror",

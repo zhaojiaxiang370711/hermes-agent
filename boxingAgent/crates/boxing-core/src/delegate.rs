@@ -36,6 +36,7 @@ pub struct Delegate {
     model: String,
     system: String,
     max_turns: usize,
+    max_tokens: u32,
     /// 当前委托深度（0 = 父级，1 = 子代理）。
     depth: usize,
 }
@@ -46,9 +47,10 @@ impl Delegate {
         model: String,
         system: String,
         max_turns: usize,
+        max_tokens: u32,
         depth: usize,
     ) -> Self {
-        Self { provider, model, system, max_turns, depth }
+        Self { provider, model, system, max_turns, max_tokens, depth }
     }
 }
 
@@ -142,6 +144,7 @@ impl Tool for Delegate {
             self.system.clone(),
             child_tools,
             self.max_turns,
+            self.max_tokens,
         );
 
         let start = Instant::now();
@@ -193,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn delegate_runs_child_and_returns_result() {
         let provider: Arc<dyn Provider> = Arc::new(StaticProvider("子代理回答".into()));
-        let delegate = Delegate::new(provider, "m".into(), "".into(), 5, 0);
+        let delegate = Delegate::new(provider, "m".into(), "".into(), 5, 4096, 0);
         let out = delegate
             .exec(json!({"goal": "执行任务"}))
             .await
@@ -206,7 +209,7 @@ mod tests {
     #[tokio::test]
     async fn orchestrator_role_rejected() {
         let provider: Arc<dyn Provider> = Arc::new(StaticProvider("".into()));
-        let delegate = Delegate::new(provider, "m".into(), "".into(), 5, 0);
+        let delegate = Delegate::new(provider, "m".into(), "".into(), 5, 4096, 0);
         let err = delegate
             .exec(json!({"goal": "x", "role": "orchestrator"}))
             .await

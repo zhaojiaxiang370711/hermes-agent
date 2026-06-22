@@ -25,6 +25,7 @@ pub struct Agent {
     system: String,
     tools: Vec<Box<dyn Tool>>,
     max_turns: usize,
+    max_tokens: u32,
     store: Option<Mutex<SessionStore>>,
 }
 
@@ -56,8 +57,9 @@ impl Agent {
         system: String,
         tools: Vec<Box<dyn Tool>>,
         max_turns: usize,
+        max_tokens: u32,
     ) -> Self {
-        Self { provider, model, system, tools, max_turns, store: None }
+        Self { provider, model, system, tools, max_turns, max_tokens, store: None }
     }
 
     /// 启用状态持久化（builder 模式）。
@@ -147,6 +149,7 @@ impl Agent {
     ) -> Result<TurnOutput, ProviderError> {
         let mut req = ChatRequest::new(self.model.as_str(), messages.to_vec());
         req.stream = true;
+        req.max_tokens = Some(self.max_tokens);
         req.tools = self.tool_defs();
         let mut stream = self.provider.stream(&req).await?;
         let mut text = String::new();
@@ -281,7 +284,7 @@ mod tests {
             call: Mutex::new(0),
         };
         let mut agent =
-            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5);
+            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5, 4096);
         let mut events = Vec::new();
         let answer = agent.run("do it", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
         assert_eq!(answer, "done");
@@ -305,7 +308,7 @@ mod tests {
             call: Mutex::new(0),
         };
         let mut agent =
-            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2);
+            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2, 4096);
         let mut events = Vec::new();
         let answer = agent.run("go", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
         assert_eq!(answer, "");
@@ -362,6 +365,7 @@ mod tests {
             "SYS".into(),
             vec![Box::new(Bash)],
             5,
+            4096,
         )
         .with_store(store);
         let answer = agent.run("do it", &mut |_| {}, &mut |_| {}).await.unwrap();

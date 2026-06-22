@@ -21,6 +21,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub system: Option<String>,
 
+    /// Max tokens for provider responses (default: 4096).
+    #[arg(long, global = true, default_value = "4096")]
+    pub max_tokens: u32,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -60,6 +64,7 @@ fn agent_tools(
     model: &str,
     system: &str,
     max_turns: usize,
+    max_tokens: u32,
 ) -> Vec<Box<dyn boxing_tools::Tool>> {
     let mut tools = boxing_tools::default_tools();
     tools.push(Box::new(boxing_core::Delegate::new(
@@ -67,6 +72,7 @@ fn agent_tools(
         model.to_string(),
         system.to_string(),
         max_turns,
+        max_tokens,
         0, // depth
     )));
     tools
@@ -77,6 +83,7 @@ async fn run_chat(
     model: Option<String>,
     system: Option<String>,
     prompt: Vec<String>,
+    max_tokens: u32,
 ) -> anyhow::Result<()> {
     let message = prompt.join(" ");
     if message.trim().is_empty() {
@@ -105,8 +112,8 @@ async fn run_chat(
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(30);
-    let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns);
-    let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns);
+    let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns, max_tokens);
+    let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
     match boxing_state::SessionStore::open(&boxing_config::state_db_path()?) {
         Ok(store) => {
             agent = agent.with_store(store);
@@ -133,17 +140,10 @@ async fn run_chat(
 
 /// Entry point dispatched from `main`.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    // Destructure up front so the chat arm can use model/system without a
-    // partial-move on cli.command. `..` skips `provider` (the global --provider
-    // flag stays a no-op this slice; the loop uses config's model.provider).
-    let Cli { model, system, command, .. } = cli;
+    let Cli { model, system, max_tokens, command, .. } = cli;
     match command {
-        // Bare `boxing-agent` (no subcommand) enters chat with no prompt,
-        // which run_chat rejects with a helpful message. (A bare positional
-        // message like `boxing-agent "hi"` isn't supported by this clap tree —
-        // use `boxing-agent chat "hi"`.)
-        None => run_chat(model, system, Vec::new()).await,
-        Some(Command::Chat { prompt }) => run_chat(model, system, prompt).await,
+        None => run_chat(model, system, Vec::new(), max_tokens).await,
+        Some(Command::Chat { prompt }) => run_chat(model, system, prompt, max_tokens).await,
         Some(Command::Model) => {
             eprintln!("boxing-agent: model selection is implemented in a later phase.");
             Ok(())
