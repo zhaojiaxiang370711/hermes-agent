@@ -39,5 +39,5 @@ round-trips are manual smoke only.
 - `providers`: OpenAI-compatible (`{base_url}/chat/completions`) + Anthropic
   (`{base_url}/v1/messages`) — 1-shot `complete` and SSE `stream`. API keys
   resolved from `providers.<k>.key_env` → `~/.hermes/.env`.
-- `tools`: default toolset implemented (read/write/edit/bash/grep/glob/ls); not yet wired into the loop (2c/2d).
-- `chat`, `model`: `chat` streams a single text-only turn (Phase 2d slice 1); tools/state-writes/tool-using loop pending.
+- `tools`: default coding toolset (read/write/edit/bash/grep/glob/ls + todo/memory/session_search); wired into the tool-using loop.
+- `chat`: `chat` runs a tool-using loop with state persistence (Phase 2d complete).

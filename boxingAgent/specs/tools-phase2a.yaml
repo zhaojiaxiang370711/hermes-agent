@@ -31,3 +31,15 @@ tools:
     params: [path?, recursive?]
     return: "目录条目（目录后缀 /）"
     side_effects: none
+  - name: todo
+    params: [todos?, merge?]
+    return: "完整任务列表（JSON）"
+    side_effects: none
+  - name: memory
+    params: [action, target, content?, old_text?]
+    return: "操作结果"
+    side_effects: "写入 ~/.hermes/{MEMORY,USER}.md"
+  - name: session_search
+    params: [query?, limit?, session_id?, around_message_id?, sort?]
+    return: "匹配的会话和消息片段"
+    side_effects: none

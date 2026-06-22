@@ -1,8 +1,8 @@
-//! boxingAgent 默认工具集（Phase 2a）。
+//! boxingAgent 默认工具集（Phase 2a + Phase 3）。
 //!
-//! 定义统一的 [`Tool`] trait 与 [`ToolError`]，以及 7 个精简编码工具：
-//! read / write / edit / bash / grep / glob / ls。每个工具一个模块，
-//! 经 [`default_tools`]（后续任务补全）一次性获取全部。
+//! 定义统一的 [`Tool`] trait 与 [`ToolError`]，以及 10 个编码工具：
+//! read / write / edit / bash / grep / glob / ls / todo / memory / session_search。
+//! 每个工具一个模块，经 [`default_tools`] 一次性获取全部。
 
 use serde_json::Value;
 
@@ -28,8 +28,9 @@ pub use search::SessionSearch;
 pub use todo::Todo;
 pub use write::Write;
 
-/// 返回全部 7 个默认工具（Phase 2a 精简集）。
+/// 返回全部 10 个默认工具（Phase 2a + Phase 3 编码集）。
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
+    let home = hermes_home();
     vec![
         Box::new(Read),
         Box::new(Write),
@@ -38,7 +39,20 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(Grep),
         Box::new(Glob),
         Box::new(Ls),
+        Box::new(Todo::new()),
+        Box::new(Memory::new(&home)),
+        Box::new(SessionSearch::new(home.join("state.db"))),
     ]
+}
+
+/// 获取 `~/.hermes` 路径（复用 Hermes 的 HOME 逻辑）。
+pub fn hermes_home() -> std::path::PathBuf {
+    std::env::var_os("HERMES_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let h = std::env::var("HOME").expect("HOME not set");
+            std::path::PathBuf::from(h).join(".hermes")
+        })
 }
 
 /// 工具错误类型；所有工具的 exec 统一返回 `Result<String, ToolError>`。
@@ -125,12 +139,15 @@ mod tests {
 mod catalog_tests {
     use super::*;
 
-    /// 实现的工具集必须恰好是 catalog 中的 7 个，名字一致。
+    /// 实现的工具集必须恰好是 catalog 中的 10 个，名字一致。
     #[test]
     fn default_tools_match_catalog() {
         const CATALOG: &str = include_str!("../../../specs/tools-phase2a.yaml");
         let names: Vec<&str> = default_tools().iter().map(|t| t.name()).collect();
-        let expected = ["read", "write", "edit", "bash", "grep", "glob", "ls"];
+        let expected = [
+            "read", "write", "edit", "bash", "grep", "glob", "ls",
+            "todo", "memory", "session_search",
+        ];
         assert_eq!(names.as_slice(), expected);
         for n in expected {
             assert!(CATALOG.contains(&format!("- name: {n}")), "catalog 缺少工具 {n}");
