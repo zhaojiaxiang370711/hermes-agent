@@ -39,6 +39,8 @@ pub struct Delegate {
     max_tokens: u32,
     /// 当前委托深度（0 = 父级，1 = 子代理）。
     depth: usize,
+    /// 异步委托注册表（用于 background=true 模式）。
+    async_registry: Option<Arc<crate::async_delegation::AsyncDelegationRegistry>>,
 }
 
 impl Delegate {
@@ -50,7 +52,47 @@ impl Delegate {
         max_tokens: u32,
         depth: usize,
     ) -> Self {
-        Self { provider, model, system, max_turns, max_tokens, depth }
+        Self { provider, model, system, max_turns, max_tokens, depth, async_registry: None }
+    }
+
+    /// 设置异步委托注册表（启用 background=true 模式）。
+    pub fn with_async_registry(mut self, registry: Arc<crate::async_delegation::AsyncDelegationRegistry>) -> Self {
+        self.async_registry = Some(registry);
+        self
+    }
+
+    /// 异步委托：后台运行子代理，立即返回 delegation_id。
+    pub async fn exec_background(
+        &self,
+        user_message: String,
+        child_tools: Vec<Box<dyn boxing_tools::Tool>>,
+    ) -> Result<String, ToolError> {
+        let registry = self.async_registry.as_ref().ok_or_else(|| {
+            ToolError::Other("异步委托注册表未配置，请使用同步委托（background=false）".into())
+        })?;
+
+        let uuid_str = uuid::Uuid::new_v4().to_string();
+        let delegation_id = format!("deleg-{}", &uuid_str[..8]);
+
+        registry.dispatch(
+            delegation_id.clone(),
+            Arc::clone(&self.provider),
+            self.model.clone(),
+            self.system.clone(),
+            child_tools,
+            self.max_turns,
+            self.max_tokens,
+            user_message,
+            None,
+        );
+
+        let result = serde_json::json!({
+            "delegation_id": delegation_id,
+            "status": "dispatched",
+            "message": "子代理已在后台启动，完成后结果将自动注入对话。"
+        });
+
+        serde_json::to_string_pretty(&result).map_err(|e| ToolError::Other(e.to_string()))
     }
 }
 
@@ -89,6 +131,11 @@ impl Tool for Delegate {
                         "enum": ["leaf", "orchestrator"],
                         "description": "Child role. 'leaf' (default) cannot \
                              delegate further. 'orchestrator' is deferred."
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Run asynchronously in background. \
+                             Returns delegation_id immediately."
                     }
                 },
                 "required": ["goal"]
@@ -110,6 +157,10 @@ impl Tool for Delegate {
             .get("role")
             .and_then(|v| v.as_str())
             .unwrap_or("leaf");
+        let background = args
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // 角色校验：3b-1 只支持 leaf
         if role != "leaf" {
@@ -137,7 +188,12 @@ impl Tool for Delegate {
             None => goal,
         };
 
-        // 创建子代理（同 provider/model/system，新对话，受限工具集）
+        // background=true：异步委托（立即返回 delegation_id）
+        if background {
+            return self.exec_background(user_message, child_tools).await;
+        }
+
+        // 同步委托：创建子代理并运行至完成
         let mut child = Agent::new(
             Arc::clone(&self.provider),
             self.model.clone(),

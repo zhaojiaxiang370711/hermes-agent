@@ -18,8 +18,10 @@ use std::sync::{Arc, Mutex};
 
 pub mod delegate;
 pub mod memory_injector;
+pub mod async_delegation;
 pub use delegate::Delegate;
 pub use memory_injector::MemoryInjector;
+pub use async_delegation::{AsyncDelegate, AsyncDelegationRegistry, CompletedDelegation};
 
 pub struct Agent {
     provider: Arc<dyn Provider>,
