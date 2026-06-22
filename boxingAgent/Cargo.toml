@@ -35,3 +35,5 @@ boxing-providers = { path = "crates/boxing-providers" }
 boxing-core = { path = "crates/boxing-core" }
 boxing-tools = { path = "crates/boxing-tools" }
 rusqlite = { version = "0.32", features = ["bundled"] }
+boxing-state = { path = "crates/boxing-state" }
+uuid = { version = "1", features = ["v4"] }

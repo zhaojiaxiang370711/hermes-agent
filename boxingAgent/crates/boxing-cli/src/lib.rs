@@ -85,7 +85,13 @@ async fn run_chat(
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(30);
-    let agent = boxing_core::Agent::new(provider, model, system, tools, max_turns);
+    let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns);
+    match boxing_state::SessionStore::open(&boxing_config::state_db_path()?) {
+        Ok(store) => {
+            agent = agent.with_store(store);
+        }
+        Err(e) => eprintln!("boxing-agent: state.db 不可用，以 ephemeral 模式运行: {e}"),
+    }
     let _answer = agent
         .run(
             &message,

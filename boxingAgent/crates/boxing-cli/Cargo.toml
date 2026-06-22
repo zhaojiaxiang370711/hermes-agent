@@ -12,6 +12,7 @@ boxing-config.workspace = true
 boxing-providers.workspace = true
 boxing-core.workspace = true
 boxing-tools.workspace = true
+boxing-state.workspace = true
 tokio.workspace = true
 
 [[bin]]

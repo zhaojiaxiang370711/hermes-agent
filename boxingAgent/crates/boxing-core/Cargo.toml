@@ -8,9 +8,14 @@ license.workspace = true
 [dependencies]
 boxing-providers.workspace = true
 boxing-tools.workspace = true
+boxing-state.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
 futures.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
 tokio.workspace = true
+rusqlite.workspace = true

@@ -1,12 +1,17 @@
-//! boxingAgent agent loop（工具迭代）。
+//! boxingAgent agent loop（工具迭代 + 状态持久化）。
 //!
 //! 持有默认工具集，每轮把 tools 发给 provider；若返回 tool_calls 则派发、
 //! 回填结果、迭代，直到模型不再调用工具或达到 max_turns。`on_delta` 流式
-//! 渲染文本，`on_event` 渲染工具调用/结果。Phase 2d-1：ephemeral（不落 state）。
+//! 渲染文本，`on_event` 渲染工具调用/结果。
+//!
+//! Phase 2d-2：通过 `with_store` 传入 `SessionStore` 后，loop 会在每次 run
+//! 开头 `create_session`，并将每条 user/assistant/tool 消息写入 state.db。
+//! 未传 store 时行为与 2d-1 一致（ephemeral）。
 
 use boxing_providers::{
     ChatMessage, ChatRequest, Provider, ProviderError, StreamEvent, ToolCall, ToolDef,
 };
+use boxing_state::{MessageRecord, SessionStore};
 use boxing_tools::Tool;
 use futures::StreamExt;
 
@@ -16,6 +21,7 @@ pub struct Agent {
     system: String,
     tools: Vec<Box<dyn Tool>>,
     max_turns: usize,
+    store: Option<SessionStore>,
 }
 
 /// 一轮 provider 调用的输出。
@@ -32,6 +38,13 @@ pub enum LoopEvent {
     MaxTurns,
 }
 
+/// Hermes 格式的工具调用持久化结构。
+#[derive(serde::Serialize)]
+struct PersistedToolCall<'a> {
+    name: &'a str,
+    arguments: &'a str,
+}
+
 impl Agent {
     pub fn new(
         provider: Box<dyn Provider>,
@@ -40,46 +53,84 @@ impl Agent {
         tools: Vec<Box<dyn Tool>>,
         max_turns: usize,
     ) -> Self {
-        Self { provider, model, system, tools, max_turns }
+        Self { provider, model, system, tools, max_turns, store: None }
+    }
+
+    /// 启用状态持久化（builder 模式）。
+    pub fn with_store(mut self, store: SessionStore) -> Self {
+        self.store = Some(store);
+        self
+    }
+
+    /// 为测试用：取出 store（便于断言持久化结果）。
+    pub fn take_store(&mut self) -> Option<SessionStore> {
+        self.store.take()
     }
 
     /// 工具调用循环。返回最终回答（中间轮文本已通过 `on_delta` 流式输出）。
+    /// 状态写入失败时传播错误。
     pub async fn run(
-        &self,
+        &mut self,
         user_message: &str,
         on_delta: &mut impl FnMut(&str),
         on_event: &mut impl FnMut(LoopEvent),
-    ) -> Result<String, ProviderError> {
+    ) -> anyhow::Result<String> {
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        if let Some(store) = &mut self.store {
+            store.create_session(
+                &session_id,
+                "cli",
+                Some(&self.model),
+                Some(&self.system),
+            )?;
+        }
+
         let mut messages: Vec<ChatMessage> = Vec::new();
         if !self.system.is_empty() {
-            messages.push(ChatMessage::new("system", self.system.as_str()));
+            let sys_msg = ChatMessage::new("system", self.system.as_str());
+            persist_msg(&mut self.store, &session_id, &sys_msg)?;
+            messages.push(sys_msg);
         }
-        messages.push(ChatMessage::new("user", user_message));
+        let user_msg = ChatMessage::new("user", user_message);
+        persist_msg(&mut self.store, &session_id, &user_msg)?;
+        messages.push(user_msg);
 
         for _ in 0..self.max_turns {
             let turn = self.step(&messages, on_delta).await?;
-            if turn.tool_calls.is_empty() {
+            let has_tools = !turn.tool_calls.is_empty();
+
+            let assistant_msg = ChatMessage {
+                role: "assistant".into(),
+                content: turn.text.clone(),
+                tool_calls: if has_tools {
+                    Some(turn.tool_calls.clone())
+                } else {
+                    None
+                },
+                tool_call_id: None,
+            };
+            persist_msg(&mut self.store, &session_id, &assistant_msg)?;
+            messages.push(assistant_msg);
+
+            if !has_tools {
                 return Ok(turn.text);
             }
-            // 记录 assistant 的工具调用消息
-            messages.push(ChatMessage {
-                role: "assistant".into(),
-                content: turn.text,
-                tool_calls: Some(turn.tool_calls.clone()),
-                tool_call_id: None,
-            });
-            // 逐个派发
+
             for tc in turn.tool_calls {
                 on_event(LoopEvent::ToolCall { name: tc.name.clone() });
                 let result = self.dispatch(&tc).await;
                 let ok = !result.starts_with("error:");
                 on_event(LoopEvent::ToolResult { name: tc.name.clone(), ok });
-                messages.push(ChatMessage {
+
+                let tool_msg = ChatMessage {
                     role: "tool".into(),
                     content: result,
                     tool_calls: None,
                     tool_call_id: Some(tc.id),
-                });
+                };
+                persist_msg(&mut self.store, &session_id, &tool_msg)?;
+                messages.push(tool_msg);
             }
         }
         on_event(LoopEvent::MaxTurns);
@@ -131,7 +182,11 @@ impl Agent {
                 let s = t.schema();
                 ToolDef {
                     name: t.name().to_string(),
-                    description: s.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    description: s
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     parameters: s
                         .get("parameters")
                         .cloned()
@@ -140,6 +195,35 @@ impl Agent {
             })
             .collect()
     }
+}
+
+/// 把一条 ChatMessage 持久化到 state.db。
+/// tool_calls 序列化为 Hermes 格式的 [{name, arguments}]。
+fn persist_msg(
+    store: &mut Option<SessionStore>,
+    session_id: &str,
+    msg: &ChatMessage,
+) -> anyhow::Result<()> {
+    let store = match store {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    let tool_calls_json = msg.tool_calls.as_ref().map(|tcs| {
+        let wire: Vec<_> = tcs
+            .iter()
+            .map(|tc| PersistedToolCall {
+                name: tc.name.as_str(),
+                arguments: tc.arguments.as_str(),
+            })
+            .collect();
+        serde_json::to_string(&wire).unwrap_or_default()
+    });
+    let mut rec = MessageRecord::new(session_id, &msg.role);
+    rec.content = Some(&msg.content);
+    rec.tool_calls = tool_calls_json.as_deref();
+    rec.tool_call_id = msg.tool_call_id.as_deref();
+    store.append_message(&rec)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -162,7 +246,10 @@ mod tests {
         ) -> Result<boxing_providers::ChatResponse, ProviderError> {
             unreachable!()
         }
-        async fn stream(&self, _: &ChatRequest) -> Result<boxing_providers::ChatStream, ProviderError> {
+        async fn stream(
+            &self,
+            _: &ChatRequest,
+        ) -> Result<boxing_providers::ChatStream, ProviderError> {
             let mut c = self.call.lock().unwrap();
             let i = *c;
             *c += 1;
@@ -190,7 +277,8 @@ mod tests {
             ],
             call: Mutex::new(0),
         };
-        let agent = Agent::new(Box::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5);
+        let mut agent =
+            Agent::new(Box::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5);
         let mut events = Vec::new();
         let answer = agent.run("do it", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
         assert_eq!(answer, "done");
@@ -213,10 +301,74 @@ mod tests {
             })]],
             call: Mutex::new(0),
         };
-        let agent = Agent::new(Box::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2);
+        let mut agent =
+            Agent::new(Box::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2);
         let mut events = Vec::new();
         let answer = agent.run("go", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
         assert_eq!(answer, "");
         assert!(events.iter().any(|e| matches!(e, LoopEvent::MaxTurns)));
+    }
+
+    /// 构建临时 schema_db（复制自 boxing-state 的测试 DDL）。
+    fn schema_db() -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "boxing-core-state-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (\
+               id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT, system_prompt TEXT,\
+               started_at REAL NOT NULL, message_count INTEGER DEFAULT 0,\
+               tool_call_count INTEGER DEFAULT 0, title TEXT);\
+             CREATE TABLE messages (\
+               id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,\
+               role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT,\
+               tool_name TEXT, timestamp REAL NOT NULL, token_count INTEGER,\
+               finish_reason TEXT, observed INTEGER DEFAULT 0,\
+               active INTEGER NOT NULL DEFAULT 1);",
+        )
+        .unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn loop_persists_messages_to_state_db() {
+        // ScriptedProvider: turn 1 = tool_call(bash), turn 2 = text "done".
+        let provider = ScriptedProvider {
+            scripts: vec![
+                vec![StreamEvent::ToolCall(ToolCall {
+                    id: "c1".into(),
+                    name: "bash".into(),
+                    arguments: "{\"command\":\"echo ok\"}".into(),
+                })],
+                vec![StreamEvent::Text("done".into())],
+            ],
+            call: Mutex::new(0),
+        };
+        let store = boxing_state::SessionStore::open(std::path::Path::new(&schema_db())).unwrap();
+        let mut agent = Agent::new(
+            Box::new(provider),
+            "m".into(),
+            "SYS".into(),
+            vec![Box::new(Bash)],
+            5,
+        )
+        .with_store(store);
+        let answer = agent.run("do it", &mut |_| {}, &mut |_| {}).await.unwrap();
+        assert_eq!(answer, "done");
+
+        // 验证 state.db：1 个 session，5 条消息
+        // system + user + assistant(tool_calls) + tool + assistant(final)
+        let store = agent.take_store().unwrap();
+        assert_eq!(store.session_count().unwrap(), 1);
+        let summaries = store.session_summaries().unwrap();
+        assert_eq!(summaries[0].message_count, Some(5));
     }
 }
