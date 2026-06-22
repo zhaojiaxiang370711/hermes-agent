@@ -6,6 +6,12 @@
 
 use serde_json::Value;
 
+pub mod read;
+pub mod write;
+
+pub use read::Read;
+pub use write::Write;
+
 /// 工具错误类型；所有工具的 exec 统一返回 `Result<String, ToolError>`。
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
