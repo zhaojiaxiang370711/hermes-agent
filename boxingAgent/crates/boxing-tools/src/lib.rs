@@ -8,7 +8,9 @@ use serde_json::Value;
 
 pub mod read;
 pub mod write;
+pub mod edit;
 
+pub use edit::Edit;
 pub use read::Read;
 pub use write::Write;
 
