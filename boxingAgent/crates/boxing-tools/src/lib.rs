@@ -8,11 +8,13 @@ use serde_json::Value;
 
 pub mod bash;
 pub mod edit;
+pub mod grep;
 pub mod read;
 pub mod write;
 
 pub use bash::Bash;
 pub use edit::Edit;
+pub use grep::Grep;
 pub use read::Read;
 pub use write::Write;
 
