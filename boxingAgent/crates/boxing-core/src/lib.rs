@@ -5,7 +5,7 @@
 //! text. `run()` is structured as one `step()` today so future tool-use can
 //! branch inside the step without rewriting the loop.
 
-use boxing_providers::{ChatMessage, ChatRequest, ChatStream, Provider, ProviderError};
+use boxing_providers::{ChatMessage, ChatRequest, Provider, ProviderError};
 use futures::StreamExt;
 
 pub struct Agent {
@@ -80,7 +80,7 @@ mod tests {
             ) -> Result<boxing_providers::ChatResponse, ProviderError> {
                 unreachable!("run() uses stream(), not complete()")
             }
-            async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
+            async fn stream(&self, req: &ChatRequest) -> Result<boxing_providers::ChatStream, ProviderError> {
                 *self.last.lock().unwrap() = Some(req.clone());
                 let d: Vec<Result<boxing_providers::TokenDelta, ProviderError>> = self
                     .deltas
