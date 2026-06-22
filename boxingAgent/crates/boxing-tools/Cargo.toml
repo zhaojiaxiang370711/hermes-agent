@@ -17,6 +17,7 @@ regex.workspace = true
 ignore.workspace = true
 glob.workspace = true
 rusqlite.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
