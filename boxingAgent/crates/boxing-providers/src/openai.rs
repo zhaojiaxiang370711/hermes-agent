@@ -54,9 +54,10 @@ impl OpenAiCompat {
 impl Provider for OpenAiCompat {
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
         let tools = openai_tools(req);
+        let messages = to_openai_messages(&req.messages);
         let body = OpenAiBody {
             model: &req.model,
-            messages: &req.messages,
+            messages,
             max_tokens: req.max_tokens,
             stream: false,
             tools,
@@ -94,9 +95,10 @@ impl Provider for OpenAiCompat {
 
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
         let tools = openai_tools(req);
+        let messages = to_openai_messages(&req.messages);
         let body = OpenAiBody {
             model: &req.model,
-            messages: &req.messages,
+            messages,
             max_tokens: req.max_tokens,
             stream: true,
             tools,
@@ -127,11 +129,59 @@ fn openai_tools(req: &ChatRequest) -> Vec<OpenAiTool<'_>> {
         .collect()
 }
 
+/// 把 ChatMessage 转成 OpenAI 线消息（assistant 工具调用用 function 包装）。
+fn to_openai_messages(msgs: &[ChatMessage]) -> Vec<OpenAiMessage> {
+    msgs.iter()
+        .map(|m| OpenAiMessage {
+            role: m.role.clone(),
+            content: m.content.clone(),
+            tool_calls: m.tool_calls.as_ref().map(|tcs| {
+                tcs.iter()
+                    .map(|tc| OpenAiMsgToolCall {
+                        id: tc.id.clone(),
+                        kind: "function",
+                        function: OpenAiMsgFunction {
+                            name: tc.name.clone(),
+                            arguments: tc.arguments.clone(),
+                        },
+                    })
+                    .collect()
+            }),
+            tool_call_id: m.tool_call_id.clone(),
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
+struct OpenAiMessage {
+    role: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<OpenAiMsgToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OpenAiMsgToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: &'static str, // "function"
+    function: OpenAiMsgFunction,
+}
+
+#[derive(Serialize)]
+struct OpenAiMsgFunction {
+    name: String,
+    arguments: String,
+}
+
 /// Wire body for `/chat/completions`.
 #[derive(Serialize)]
 struct OpenAiBody<'a> {
     model: &'a str,
-    messages: &'a [ChatMessage],
+    messages: Vec<OpenAiMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     stream: bool,
@@ -348,6 +398,44 @@ mod tests {
         assert_eq!(resp.tool_calls[0].id, "call_1");
         assert_eq!(resp.tool_calls[0].name, "read");
         assert_eq!(resp.tool_calls[0].arguments, "{\"path\":\"a.rs\"}");
+    }
+
+    #[tokio::test]
+    async fn complete_sends_tool_history_in_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("authorization", "Bearer k"))
+            .and(body_string_contains("\"function\":{\"name\":\"bash\""))
+            .and(body_string_contains("\"tool_call_id\":\"call_1\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "choices": [{"message": {"content": "done"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })))
+            .mount(&server)
+            .await;
+        let p = OpenAiCompat::new(server.uri(), "k");
+        let mut r = ChatRequest::new("gpt-test", vec![]);
+        r.max_tokens = Some(16);
+        r.messages.push(ChatMessage::new("user", "list files"));
+        r.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: "thinking".into(),
+            tool_calls: Some(vec![ToolCall {
+                id: "call_1".into(),
+                name: "bash".into(),
+                arguments: "{\"command\":\"ls\"}".into(),
+            }]),
+            tool_call_id: None,
+        });
+        r.messages.push(ChatMessage {
+            role: "tool".into(),
+            content: "a.rs\nb.rs".into(),
+            tool_calls: None,
+            tool_call_id: Some("call_1".into()),
+        });
+        let resp = p.complete(&r).await.unwrap();
+        assert_eq!(resp.content, "done");
     }
 
     #[tokio::test]
