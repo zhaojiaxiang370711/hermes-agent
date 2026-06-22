@@ -12,6 +12,7 @@ pub mod glob;
 pub mod grep;
 pub mod ls;
 pub mod read;
+pub mod todo;
 pub mod write;
 
 pub use bash::Bash;
@@ -20,6 +21,7 @@ pub use glob::Glob;
 pub use grep::Grep;
 pub use ls::Ls;
 pub use read::Read;
+pub use todo::Todo;
 pub use write::Write;
 
 /// 返回全部 7 个默认工具（Phase 2a 精简集）。
