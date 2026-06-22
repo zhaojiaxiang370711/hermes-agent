@@ -68,6 +68,29 @@ impl SessionStore {
         }
         Ok(out)
     }
+
+    /// 创建会话：INSERT sessions(id, source, started_at=now, model?, system_prompt?)。
+    /// 重复 id → PRIMARY KEY 约束错误（向上传播）。
+    pub fn create_session(
+        &self,
+        id: &str,
+        source: &str,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        self.conn
+            .execute(
+                "INSERT INTO sessions (id, source, started_at, model, system_prompt) \
+                 VALUES (?, ?, ?, ?, ?)",
+                rusqlite::params![id, source, now, model, system_prompt],
+            )
+            .context("creating session")?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -143,5 +166,56 @@ mod tests {
             .unwrap();
         assert_eq!(mode, "wal", "应为 WAL 日志模式");
         assert_eq!(store.session_count().unwrap(), 2); // 读仍可用
+    }
+
+    /// 建临时库，含 boxing-state 读写的 sessions/messages 列（非完整 30+ 列，
+    /// 只覆盖 boxing-state 触碰的列 + NOT NULL/默认列）。
+    fn schema_db() -> PathBuf {
+        let dir = unique_dir("schema");
+        let path = dir.join("state.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sessions (\
+               id TEXT PRIMARY KEY, source TEXT NOT NULL, model TEXT, system_prompt TEXT,\
+               started_at REAL NOT NULL, message_count INTEGER DEFAULT 0,\
+               tool_call_count INTEGER DEFAULT 0, title TEXT);\
+             CREATE TABLE messages (\
+               id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,\
+               role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT,\
+               tool_name TEXT, timestamp REAL NOT NULL, token_count INTEGER,\
+               finish_reason TEXT, observed INTEGER DEFAULT 0,\
+               active INTEGER NOT NULL DEFAULT 1);",
+        )
+        .unwrap();
+        drop(conn);
+        path
+    }
+
+    #[test]
+    fn create_session_inserts_row() {
+        let path = schema_db();
+        let store = SessionStore::open(&path).unwrap();
+        store
+            .create_session("s1", "cli", Some("mimo"), Some("sys"))
+            .unwrap();
+        let (source, model, sys): (String, Option<String>, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT source, model, system_prompt FROM sessions WHERE id='s1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(source, "cli");
+        assert_eq!(model.as_deref(), Some("mimo"));
+        assert_eq!(sys.as_deref(), Some("sys"));
+    }
+
+    #[test]
+    fn create_session_duplicate_id_errors() {
+        let path = schema_db();
+        let store = SessionStore::open(&path).unwrap();
+        store.create_session("s1", "cli", None, None).unwrap();
+        assert!(store.create_session("s1", "cli", None, None).is_err());
     }
 }
