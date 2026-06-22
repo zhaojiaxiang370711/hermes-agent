@@ -13,6 +13,7 @@ pub mod grep;
 pub mod ls;
 pub mod mcp;
 pub mod memory;
+pub mod oauth;
 pub mod read;
 pub mod search;
 pub mod todo;

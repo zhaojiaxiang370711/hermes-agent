@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::oauth::{OAuthClient, OAuthConfig};
 use crate::{Tool, ToolError};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -74,6 +75,9 @@ pub struct McpServerConfig {
     pub transport: String,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+    /// OAuth 2.1 配置（需要授权的 HTTP/SSE 服务器）
+    #[serde(default)]
+    pub oauth: Option<OAuthConfig>,
 }
 
 fn default_timeout() -> u64 {
@@ -164,6 +168,8 @@ pub struct McpClient {
     url: String,
     headers: HashMap<String, String>,
     http_client: Option<reqwest::blocking::Client>,
+    // OAuth
+    oauth_client: Option<OAuthClient>,
     // 通用
     next_id: AtomicU64,
     server_name: String,
@@ -203,6 +209,7 @@ impl McpClient {
                     url: String::new(),
                     headers: HashMap::new(),
                     http_client: None,
+                    oauth_client: None,
                     next_id: AtomicU64::new(1),
                     server_name: name.to_string(),
                     cached_tools: Mutex::new(None),
@@ -214,6 +221,11 @@ impl McpClient {
                     .build()
                     .map_err(|e| ToolError::Other(format!("创建 HTTP 客户端: {e}")))?;
 
+                // OAuth 客户端（如果配置了）
+                let oauth_client = config.oauth.as_ref().map(|oc| {
+                    OAuthClient::new(&config.url, oc, &crate::hermes_home(), name)
+                });
+
                 Self {
                     transport: tt,
                     child: None,
@@ -222,6 +234,7 @@ impl McpClient {
                     url: config.url.clone(),
                     headers: config.headers.clone(),
                     http_client: Some(http_client),
+                    oauth_client,
                     next_id: AtomicU64::new(1),
                     server_name: name.to_string(),
                     cached_tools: Mutex::new(None),
@@ -317,6 +330,19 @@ impl McpClient {
                     .map_err(|e| ToolError::Other(format!("序列化: {e}")))?;
                 let client = self.http_client.as_ref().unwrap();
                 let mut req = client.post(&self.url).body(body);
+                // OAuth: 注入 Authorization Bearer token
+                if let Some(oauth) = &self.oauth_client {
+                    match oauth.get_access_token() {
+                        Ok(token) => {
+                            req = req.header("Authorization", format!("Bearer {token}"));
+                        }
+                        Err(e) => {
+                            return Err(ToolError::Other(format!(
+                                "MCP OAuth: 无法获取 access_token: {e}"
+                            )));
+                        }
+                    }
+                }
                 for (k, v) in &self.headers {
                     req = req.header(k, v);
                 }
