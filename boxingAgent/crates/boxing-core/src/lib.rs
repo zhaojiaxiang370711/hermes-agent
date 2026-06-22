@@ -14,7 +14,10 @@ use boxing_providers::{
 use boxing_state::{MessageRecord, SessionStore};
 use boxing_tools::Tool;
 use futures::StreamExt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+pub mod delegate;
+pub use delegate::Delegate;
 
 pub struct Agent {
     provider: Arc<dyn Provider>,
@@ -22,7 +25,7 @@ pub struct Agent {
     system: String,
     tools: Vec<Box<dyn Tool>>,
     max_turns: usize,
-    store: Option<SessionStore>,
+    store: Option<Mutex<SessionStore>>,
 }
 
 /// 一轮 provider 调用的输出。
@@ -59,13 +62,13 @@ impl Agent {
 
     /// 启用状态持久化（builder 模式）。
     pub fn with_store(mut self, store: SessionStore) -> Self {
-        self.store = Some(store);
+        self.store = Some(Mutex::new(store));
         self
     }
 
     /// 为测试用：取出 store（便于断言持久化结果）。
     pub fn take_store(&mut self) -> Option<SessionStore> {
-        self.store.take()
+        self.store.take().map(|m| m.into_inner().expect("Mutex poisoned"))
     }
 
     /// 工具调用循环。返回最终回答（中间轮文本已通过 `on_delta` 流式输出）。
@@ -78,23 +81,21 @@ impl Agent {
     ) -> anyhow::Result<String> {
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        if let Some(store) = &mut self.store {
-            store.create_session(
-                &session_id,
-                "cli",
-                Some(&self.model),
-                Some(&self.system),
-            )?;
+        if let Some(store) = &self.store {
+            store
+                .lock()
+                .unwrap()
+                .create_session(&session_id, "cli", Some(&self.model), Some(&self.system))?;
         }
 
         let mut messages: Vec<ChatMessage> = Vec::new();
         if !self.system.is_empty() {
             let sys_msg = ChatMessage::new("system", self.system.as_str());
-            persist_msg(&mut self.store, &session_id, &sys_msg)?;
+            persist_msg(&self.store, &session_id, &sys_msg)?;
             messages.push(sys_msg);
         }
         let user_msg = ChatMessage::new("user", user_message);
-        persist_msg(&mut self.store, &session_id, &user_msg)?;
+        persist_msg(&self.store, &session_id, &user_msg)?;
         messages.push(user_msg);
 
         for _ in 0..self.max_turns {
@@ -111,7 +112,7 @@ impl Agent {
                 },
                 tool_call_id: None,
             };
-            persist_msg(&mut self.store, &session_id, &assistant_msg)?;
+            persist_msg(&self.store, &session_id, &assistant_msg)?;
             messages.push(assistant_msg);
 
             if !has_tools {
@@ -130,7 +131,7 @@ impl Agent {
                     tool_calls: None,
                     tool_call_id: Some(tc.id),
                 };
-                persist_msg(&mut self.store, &session_id, &tool_msg)?;
+                persist_msg(&self.store, &session_id, &tool_msg)?;
                 messages.push(tool_msg);
             }
         }
@@ -201,7 +202,7 @@ impl Agent {
 /// 把一条 ChatMessage 持久化到 state.db。
 /// tool_calls 序列化为 Hermes 格式的 [{name, arguments}]。
 fn persist_msg(
-    store: &mut Option<SessionStore>,
+    store: &Option<Mutex<SessionStore>>,
     session_id: &str,
     msg: &ChatMessage,
 ) -> anyhow::Result<()> {
@@ -209,6 +210,7 @@ fn persist_msg(
         Some(s) => s,
         None => return Ok(()),
     };
+    let mut guard = store.lock().map_err(|e| anyhow::anyhow!("{e}"))?;
     let tool_calls_json = msg.tool_calls.as_ref().map(|tcs| {
         let wire: Vec<_> = tcs
             .iter()
@@ -223,7 +225,7 @@ fn persist_msg(
     rec.content = Some(&msg.content);
     rec.tool_calls = tool_calls_json.as_deref();
     rec.tool_call_id = msg.tool_call_id.as_deref();
-    store.append_message(&rec)?;
+    guard.append_message(&rec)?;
     Ok(())
 }
 
