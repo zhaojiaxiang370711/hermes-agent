@@ -14,9 +14,10 @@ use boxing_providers::{
 use boxing_state::{MessageRecord, SessionStore};
 use boxing_tools::Tool;
 use futures::StreamExt;
+use std::sync::Arc;
 
 pub struct Agent {
-    provider: Box<dyn Provider>,
+    provider: Arc<dyn Provider>,
     model: String,
     system: String,
     tools: Vec<Box<dyn Tool>>,
@@ -47,7 +48,7 @@ struct PersistedToolCall<'a> {
 
 impl Agent {
     pub fn new(
-        provider: Box<dyn Provider>,
+        provider: Arc<dyn Provider>,
         model: String,
         system: String,
         tools: Vec<Box<dyn Tool>>,
@@ -278,7 +279,7 @@ mod tests {
             call: Mutex::new(0),
         };
         let mut agent =
-            Agent::new(Box::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5);
+            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5);
         let mut events = Vec::new();
         let answer = agent.run("do it", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
         assert_eq!(answer, "done");
@@ -302,7 +303,7 @@ mod tests {
             call: Mutex::new(0),
         };
         let mut agent =
-            Agent::new(Box::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2);
+            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2);
         let mut events = Vec::new();
         let answer = agent.run("go", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
         assert_eq!(answer, "");
@@ -354,7 +355,7 @@ mod tests {
         };
         let store = boxing_state::SessionStore::open(std::path::Path::new(&schema_db())).unwrap();
         let mut agent = Agent::new(
-            Box::new(provider),
+            Arc::new(provider),
             "m".into(),
             "SYS".into(),
             vec![Box::new(Bash)],

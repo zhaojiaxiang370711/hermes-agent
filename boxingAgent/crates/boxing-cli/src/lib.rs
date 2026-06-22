@@ -4,6 +4,7 @@
 //! (no subcommand ⇒ chat) and `config` is a builtin subcommand.
 use clap::{Parser, Subcommand};
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[command(name = "boxing-agent", version, about = "Faithful Rust port of the Hermes agent core")]
@@ -68,8 +69,10 @@ async fn run_chat(
     let env_path = boxing_config::env_path()?;
     let config = boxing_config::load(&config_path)?;
 
-    let provider = boxing_providers::resolve(&config, &env_path)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let provider = Arc::from(
+        boxing_providers::resolve(&config, &env_path)
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+    );
 
     let model = match model {
         Some(m) => m,
