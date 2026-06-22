@@ -11,6 +11,7 @@ pub mod edit;
 pub mod glob;
 pub mod grep;
 pub mod ls;
+pub mod mcp;
 pub mod memory;
 pub mod read;
 pub mod search;
@@ -81,7 +82,7 @@ pub enum ToolError {
 /// 工具基于进程 cwd 运行；本阶段无 ToolContext / 沙箱 / 审批。
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
     fn schema(&self) -> Value;
     async fn exec(&self, args: Value) -> Result<String, ToolError>;
 }
@@ -143,12 +144,13 @@ mod catalog_tests {
     #[test]
     fn default_tools_match_catalog() {
         const CATALOG: &str = include_str!("../../../specs/tools-phase2a.yaml");
-        let names: Vec<&str> = default_tools().iter().map(|t| t.name()).collect();
+        let tools = default_tools();
+        let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
         let expected = [
             "read", "write", "edit", "bash", "grep", "glob", "ls",
             "todo", "memory", "session_search",
         ];
-        assert_eq!(names.as_slice(), expected);
+        assert_eq!(names, expected);
         for n in expected {
             assert!(CATALOG.contains(&format!("- name: {n}")), "catalog 缺少工具 {n}");
         }

@@ -3,6 +3,7 @@
 //! Command names mirror hermes_cli/main.py: `_AGENT_COMMANDS = {None, "chat", ...}`
 //! (no subcommand ⇒ chat) and `config` is a builtin subcommand.
 use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -62,15 +63,34 @@ pub enum ConfigAction {
 /// Minimal built-in system prompt (overridable via `--system`).
 const DEFAULT_SYSTEM: &str = "You are boxingAgent, a helpful assistant.";
 
-/// 构建完整工具集：默认工具 + delegate_task（子代理委托，支持异步）。
+/// 构建完整工具集：默认工具 + MCP 工具 + delegate_task（子代理委托，支持异步）。
 fn agent_tools(
     provider: Arc<dyn boxing_providers::Provider>,
     model: &str,
     system: &str,
     max_turns: usize,
     max_tokens: u32,
+    config: &boxing_config::ConfigDoc,
 ) -> Vec<Box<dyn boxing_tools::Tool>> {
     let mut tools = boxing_tools::default_tools();
+
+    // 发现并注册 MCP 工具
+    if let Ok(mcp_yaml) = config.get("mcp_servers") {
+        if !mcp_yaml.is_empty() {
+            match serde_yaml::from_str::<HashMap<String, boxing_tools::mcp::McpServerConfig>>(&mcp_yaml) {
+                Ok(servers) if !servers.is_empty() => {
+                    eprintln!("MCP: 发现 {} 个配置的服务器", servers.len());
+                    let mcp_tools = boxing_tools::mcp::discover_mcp_tools(&servers);
+                    eprintln!("MCP: 共发现 {} 个工具", mcp_tools.len());
+                    tools.extend(mcp_tools);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("MCP: 解析 mcp_servers 配置失败: {e}");
+                }
+            }
+        }
+    }
 
     // 创建异步委托注册表
     let async_registry = Arc::new(boxing_core::AsyncDelegationRegistry::new());
@@ -131,7 +151,7 @@ async fn run_chat(
     };
     let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
 
-    let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns, max_tokens);
+    let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns, max_tokens, &config);
     let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
 
     // 启用记忆自动注入

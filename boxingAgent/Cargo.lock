@@ -129,6 +129,9 @@ dependencies = [
  "boxing-state",
  "boxing-tools",
  "clap",
+ "serde",
+ "serde_json",
+ "serde_yaml",
  "tokio",
 ]
 
@@ -196,6 +199,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror",
  "tokio",
 ]
