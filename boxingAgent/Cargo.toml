@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hermes-config",
-    "crates/hermes-state",
-    "crates/hermes-providers",
-    "crates/hermes-tools",
-    "crates/hermes-core",
-    "crates/hermes-cli",
+    "crates/boxing-config",
+    "crates/boxing-state",
+    "crates/boxing-providers",
+    "crates/boxing-tools",
+    "crates/boxing-core",
+    "crates/boxing-cli",
 ]
 
 [workspace.package]
@@ -27,5 +27,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 bytes = "1"
 async-trait = "0.1"
 futures = "0.3"
-hermes-config = { path = "crates/hermes-config" }
+boxing-config = { path = "crates/boxing-config" }
+boxing-providers = { path = "crates/boxing-providers" }
+boxing-core = { path = "crates/boxing-core" }
 rusqlite = { version = "0.32", features = ["bundled"] }

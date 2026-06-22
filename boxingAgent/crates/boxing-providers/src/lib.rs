@@ -1,4 +1,4 @@
-//! LLM providers for hermes-rs.
+//! LLM providers for boxingAgent.
 //!
 //! Provider-agnostic chat surface: a [`Provider`] trait with a 1-shot
 //! [`Provider::complete`] and a token-delta [`Provider::stream`], plus the

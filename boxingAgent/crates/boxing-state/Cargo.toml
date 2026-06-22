@@ -1,5 +1,5 @@
 [package]
-name = "hermes-state"
+name = "boxing-state"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

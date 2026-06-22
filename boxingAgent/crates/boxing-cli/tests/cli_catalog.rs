@@ -5,7 +5,7 @@ use clap::{CommandFactory, Parser};
 #[test]
 fn implemented_commands_match_catalog() {
     // Every catalog command must be a real clap subcommand.
-    let cmd = hermes_cli::Cli::command();
+    let cmd = boxing_cli::Cli::command();
     let subs: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
     for required in ["chat", "config", "model"] {
         assert!(subs.contains(&required), "missing subcommand: {required}");
@@ -19,6 +19,6 @@ fn implemented_commands_match_catalog() {
     }
 
     // Unknown commands must remain rejected.
-    assert!(hermes_cli::Cli::try_parse_from(["hermes-rs", "dashboard"]).is_err());
-    assert!(hermes_cli::Cli::try_parse_from(["hermes-rs", "web"]).is_err());
+    assert!(boxing_cli::Cli::try_parse_from(["boxing-agent", "dashboard"]).is_err());
+    assert!(boxing_cli::Cli::try_parse_from(["boxing-agent", "web"]).is_err());
 }

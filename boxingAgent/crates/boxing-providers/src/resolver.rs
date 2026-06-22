@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use hermes_config::ConfigDoc;
+use boxing_config::ConfigDoc;
 
 use crate::{
     Anthropic, OpenAiCompat, Provider, ProviderError,
@@ -16,7 +16,7 @@ use crate::{
 
 /// Build the configured provider, resolving its API key from `env_path`.
 ///
-/// `env_path` is normally `~/.hermes/.env` (`hermes_config::env_path()`); the
+/// `env_path` is normally `~/.hermes/.env` (`boxing_config::env_path()`); the
 /// key is looked up by the name in `providers.<key>.key_env`.
 pub fn resolve(config: &ConfigDoc, env_path: &Path) -> Result<Box<dyn Provider>, ProviderError> {
     let provider_key = config
@@ -31,7 +31,7 @@ pub fn resolve(config: &ConfigDoc, env_path: &Path) -> Result<Box<dyn Provider>,
         .get(&format!("providers.{provider_key}.key_env"))
         .map_err(|e| ProviderError::Config(format!("providers.{provider_key}.key_env: {e}")))?;
 
-    let api_key = hermes_config::env_value(env_path, &key_env).ok_or_else(|| {
+    let api_key = boxing_config::env_value(env_path, &key_env).ok_or_else(|| {
         ProviderError::Config(format!(
             "API key '{key_env}' (providers.{provider_key}.key_env) not found in {}",
             env_path.display()

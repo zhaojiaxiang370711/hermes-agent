@@ -1,5 +1,5 @@
 [package]
-name = "hermes-tools"
+name = "boxing-tools"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,5 +1,5 @@
 [package]
-name = "hermes-providers"
+name = "boxing-providers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ tokio.workspace = true
 reqwest.workspace = true
 bytes.workspace = true
 futures.workspace = true
-hermes-config.workspace = true
+boxing-config.workspace = true
 
 [dev-dependencies]
 wiremock = "0.6"

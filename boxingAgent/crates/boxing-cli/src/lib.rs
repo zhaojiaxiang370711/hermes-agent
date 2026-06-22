@@ -1,4 +1,4 @@
-//! Command-line interface for hermes-rs (Phase 1a: scaffold + config).
+//! Command-line interface for boxingAgent (Phase 1a: scaffold + config).
 //!
 //! Command names mirror hermes_cli/main.py: `_AGENT_COMMANDS = {None, "chat", ...}`
 //! (no subcommand ⇒ chat) and `config` is a builtin subcommand.
@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use std::path::Path;
 
 #[derive(Parser, Debug)]
-#[command(name = "hermes-rs", version, about = "Faithful Rust port of the Hermes agent core")]
+#[command(name = "boxing-agent", version, about = "Faithful Rust port of the Hermes agent core")]
 pub struct Cli {
     /// Override the model id (e.g. "example-model").
     #[arg(long, global = true)]
@@ -50,14 +50,14 @@ pub enum ConfigAction {
 pub fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         None | Some(Command::Chat { .. }) => {
-            eprintln!("hermes-rs: agent chat loop is implemented in Phase 1b.");
+            eprintln!("boxing-agent: agent chat loop is implemented in Phase 1b.");
             Ok(())
         }
         Some(Command::Model) => {
-            eprintln!("hermes-rs: model selection is implemented in Phase 1b.");
+            eprintln!("boxing-agent: model selection is implemented in Phase 1b.");
             Ok(())
         }
-        Some(Command::Config { action }) => run_config_at(&hermes_config::config_path()?, action),
+        Some(Command::Config { action }) => run_config_at(&boxing_config::config_path()?, action),
     }
 }
 
@@ -65,18 +65,18 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
 pub fn run_config_at(path: &Path, action: ConfigAction) -> anyhow::Result<()> {
     match action {
         ConfigAction::Get { key } => {
-            let doc = hermes_config::load(path)?;
+            let doc = boxing_config::load(path)?;
             let val = doc.get(&key).map_err(|e| anyhow::anyhow!("{}", e))?;
             println!("{val}");
         }
         ConfigAction::Set { key, value } => {
-            let mut doc = hermes_config::load_or_default(path)?;
+            let mut doc = boxing_config::load_or_default(path)?;
             doc.set(&key, &value).map_err(|e| anyhow::anyhow!("{}", e))?;
-            hermes_config::save(path, &doc)?;
+            boxing_config::save(path, &doc)?;
             println!("set {key} = {value}");
         }
         ConfigAction::List { key } => {
-            let doc = hermes_config::load(path)?;
+            let doc = boxing_config::load(path)?;
             let k = key.as_deref().unwrap_or("");
             for name in doc.list(k).map_err(|e| anyhow::anyhow!("{}", e))? {
                 println!("{name}");
@@ -92,27 +92,27 @@ mod tests {
 
     #[test]
     fn no_subcommand_is_chat_default() {
-        let cli = Cli::try_parse_from(["hermes-rs"]).unwrap();
+        let cli = Cli::try_parse_from(["boxing-agent"]).unwrap();
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn global_flags_parse() {
-        let cli = Cli::try_parse_from(["hermes-rs", "--model", "m", "--provider", "p"]).unwrap();
+        let cli = Cli::try_parse_from(["boxing-agent", "--model", "m", "--provider", "p"]).unwrap();
         assert_eq!(cli.model.as_deref(), Some("m"));
         assert_eq!(cli.provider.as_deref(), Some("p"));
     }
 
     #[test]
     fn config_get_set_list_parse() {
-        Cli::try_parse_from(["hermes-rs", "config", "get", "agent.max_turns"]).unwrap();
-        Cli::try_parse_from(["hermes-rs", "config", "set", "agent.max_turns", "30"]).unwrap();
-        Cli::try_parse_from(["hermes-rs", "config", "list"]).unwrap();
-        Cli::try_parse_from(["hermes-rs", "config", "list", "agent"]).unwrap();
+        Cli::try_parse_from(["boxing-agent", "config", "get", "agent.max_turns"]).unwrap();
+        Cli::try_parse_from(["boxing-agent", "config", "set", "agent.max_turns", "30"]).unwrap();
+        Cli::try_parse_from(["boxing-agent", "config", "list"]).unwrap();
+        Cli::try_parse_from(["boxing-agent", "config", "list", "agent"]).unwrap();
     }
 
     #[test]
     fn unknown_command_rejected() {
-        assert!(Cli::try_parse_from(["hermes-rs", "dashboard"]).is_err());
+        assert!(Cli::try_parse_from(["boxing-agent", "dashboard"]).is_err());
     }
 }

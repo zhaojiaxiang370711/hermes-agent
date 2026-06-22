@@ -1,4 +1,4 @@
-//! Faithful config interop for hermes-rs.
+//! Faithful config interop for boxingAgent.
 
 pub mod doc;
 pub mod envfile;

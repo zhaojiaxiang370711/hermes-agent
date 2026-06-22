@@ -1,4 +1,4 @@
-# hermes-rs
+# boxingAgent
 
 Faithful Rust port of the Hermes agent **core**, staged per
 `docs/superpowers/specs/2026-06-18-hermes-rs-core-rewrite-design.md`.
@@ -7,11 +7,11 @@ Faithful Rust port of the Hermes agent **core**, staged per
 state read, and Phase-1 LLM providers.
 
 ## Layout
-- `crates/hermes-config` — `~/.hermes/config.yaml` read/write (order- and unknown-key-preserving) + `.env` key reader + `state_db_path()`
-- `crates/hermes-state` — reads the shared `~/.hermes/state.db` (sessions, read-only)
-- `crates/hermes-providers` — `Provider` trait + OpenAI-compatible + Anthropic clients (1-shot + SSE), config/.env resolver
-- `crates/hermes-cli` — `hermes-rs` binary
-- `crates/hermes-{tools,core}` — stubs (Phase 2)
+- `crates/boxing-config` — `~/.hermes/config.yaml` read/write (order- and unknown-key-preserving) + `.env` key reader + `state_db_path()`
+- `crates/boxing-state` — reads the shared `~/.hermes/state.db` (sessions, read-only)
+- `crates/boxing-providers` — `Provider` trait + OpenAI-compatible + Anthropic clients (1-shot + SSE), config/.env resolver
+- `crates/boxing-cli` — `boxing-agent` binary
+- `crates/boxing-{tools,core}` — stubs (Phase 2)
 
 ## Build & run
 ```
