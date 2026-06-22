@@ -124,7 +124,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "boxing-config",
+ "boxing-core",
+ "boxing-providers",
  "clap",
+ "tokio",
 ]
 
 [[package]]
@@ -140,6 +143,12 @@ dependencies = [
 [[package]]
 name = "boxing-core"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "boxing-providers",
+ "futures",
+ "tokio",
+]
 
 [[package]]
 name = "boxing-providers"
