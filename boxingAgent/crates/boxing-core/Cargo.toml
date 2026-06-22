@@ -4,3 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+[dependencies]
+boxing-providers.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio.workspace = true
