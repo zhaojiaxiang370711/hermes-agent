@@ -33,4 +33,5 @@ futures = "0.3"
 boxing-config = { path = "crates/boxing-config" }
 boxing-providers = { path = "crates/boxing-providers" }
 boxing-core = { path = "crates/boxing-core" }
+boxing-tools = { path = "crates/boxing-tools" }
 rusqlite = { version = "0.32", features = ["bundled"] }

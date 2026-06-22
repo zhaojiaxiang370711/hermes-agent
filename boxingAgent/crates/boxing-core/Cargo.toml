@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 boxing-providers.workspace = true
+boxing-tools.workspace = true
+serde_json.workspace = true
 futures.workspace = true
 
 [dev-dependencies]

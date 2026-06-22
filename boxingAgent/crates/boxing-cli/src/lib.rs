@@ -79,18 +79,28 @@ async fn run_chat(
     };
     let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
 
-    let agent = boxing_core::Agent::new(provider, model, system);
-    let out = agent
-        .run(&message, &mut |delta| print!("{delta}"))
+    let tools = boxing_tools::default_tools();
+    let max_turns = config
+        .get("agent.max_turns")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(30);
+    let agent = boxing_core::Agent::new(provider, model, system, tools, max_turns);
+    let _answer = agent
+        .run(
+            &message,
+            &mut |delta| print!("{delta}"),
+            &mut |ev| match ev {
+                boxing_core::LoopEvent::ToolCall { name } => eprintln!("→ {name}"),
+                boxing_core::LoopEvent::ToolResult { name, ok } => {
+                    eprintln!("{} {name}", if ok { "✓" } else { "✗" })
+                }
+                boxing_core::LoopEvent::MaxTurns => eprintln!("boxing-agent: 达到最大轮数"),
+            },
+        )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!();
-    if !out.tool_calls.is_empty() {
-        eprintln!(
-            "boxing-agent: 模型请求 {} 个工具（执行在 Phase 2d）",
-            out.tool_calls.len()
-        );
-    }
     Ok(())
 }
 

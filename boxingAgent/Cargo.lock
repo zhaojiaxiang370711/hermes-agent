@@ -126,6 +126,7 @@ dependencies = [
  "boxing-config",
  "boxing-core",
  "boxing-providers",
+ "boxing-tools",
  "clap",
  "tokio",
 ]
@@ -146,7 +147,9 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "boxing-providers",
+ "boxing-tools",
  "futures",
+ "serde_json",
  "tokio",
 ]
 
