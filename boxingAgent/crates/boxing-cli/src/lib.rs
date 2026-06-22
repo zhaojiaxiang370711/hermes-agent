@@ -25,6 +25,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "4096")]
     pub max_tokens: u32,
 
+    /// Max turns for the tool loop (default: 30).
+    #[arg(long, global = true, default_value = "30")]
+    pub max_turns: usize,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -58,7 +62,7 @@ pub enum ConfigAction {
 /// Minimal built-in system prompt (overridable via `--system`).
 const DEFAULT_SYSTEM: &str = "You are boxingAgent, a helpful assistant.";
 
-/// 构建完整工具集：默认工具 + delegate_task（子代理委托）。
+/// 构建完整工具集：默认工具 + delegate_task（子代理委托，支持异步）。
 fn agent_tools(
     provider: Arc<dyn boxing_providers::Provider>,
     model: &str,
@@ -67,14 +71,33 @@ fn agent_tools(
     max_tokens: u32,
 ) -> Vec<Box<dyn boxing_tools::Tool>> {
     let mut tools = boxing_tools::default_tools();
-    tools.push(Box::new(boxing_core::Delegate::new(
+
+    // 创建异步委托注册表
+    let async_registry = Arc::new(boxing_core::AsyncDelegationRegistry::new());
+
+    // 同步委托（background=false 时使用）
+    tools.push(Box::new(
+        boxing_core::Delegate::new(
+            provider.clone(),
+            model.to_string(),
+            system.to_string(),
+            max_turns,
+            max_tokens,
+            0, // depth
+        ).with_async_registry(Arc::clone(&async_registry))
+    ));
+
+    // 异步委托（background=true 时使用）
+    tools.push(Box::new(boxing_core::AsyncDelegate::new(
         provider,
         model.to_string(),
         system.to_string(),
         max_turns,
         max_tokens,
         0, // depth
+        async_registry,
     )));
+
     tools
 }
 
@@ -84,6 +107,7 @@ async fn run_chat(
     system: Option<String>,
     prompt: Vec<String>,
     max_tokens: u32,
+    max_turns: usize,
 ) -> anyhow::Result<()> {
     let message = prompt.join(" ");
     if message.trim().is_empty() {
@@ -107,11 +131,6 @@ async fn run_chat(
     };
     let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
 
-    let max_turns = config
-        .get("agent.max_turns")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(30);
     let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns, max_tokens);
     let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
 
@@ -152,10 +171,10 @@ async fn run_chat(
 
 /// Entry point dispatched from `main`.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    let Cli { model, system, max_tokens, command, .. } = cli;
+    let Cli { model, system, max_tokens, max_turns, command, .. } = cli;
     match command {
-        None => run_chat(model, system, Vec::new(), max_tokens).await,
-        Some(Command::Chat { prompt }) => run_chat(model, system, prompt, max_tokens).await,
+        None => run_chat(model, system, Vec::new(), max_tokens, max_turns).await,
+        Some(Command::Chat { prompt }) => run_chat(model, system, prompt, max_tokens, max_turns).await,
         Some(Command::Model) => {
             eprintln!("boxing-agent: model selection is implemented in a later phase.");
             Ok(())
