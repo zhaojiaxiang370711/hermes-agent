@@ -15,6 +15,34 @@ pub struct SessionSummary {
     pub title: Option<String>,
 }
 
+/// 追加消息的最小记录，覆盖 user/assistant/tool 三种消息。
+/// `tool_calls` 为预序列化 JSON（调用方负责）。
+pub struct MessageRecord<'a> {
+    pub session_id: &'a str,
+    pub role: &'a str,
+    pub content: Option<&'a str>,
+    pub tool_name: Option<&'a str>,
+    pub tool_calls: Option<&'a str>,
+    pub tool_call_id: Option<&'a str>,
+    pub token_count: Option<i64>,
+    pub finish_reason: Option<&'a str>,
+}
+
+impl<'a> MessageRecord<'a> {
+    pub fn new(session_id: &'a str, role: &'a str) -> Self {
+        Self {
+            session_id,
+            role,
+            content: None,
+            tool_name: None,
+            tool_calls: None,
+            tool_call_id: None,
+            token_count: None,
+            finish_reason: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SessionStore {
     conn: rusqlite::Connection,
@@ -90,6 +118,49 @@ impl SessionStore {
             )
             .context("creating session")?;
         Ok(())
+    }
+
+    /// 追加消息：INSERT messages(...) + 递增 sessions.message_count（同一事务）。
+    /// role=='tool' 或 tool_calls 非空时，同时递增 tool_call_count。返回新消息行 id。
+    pub fn append_message(&mut self, rec: &MessageRecord) -> anyhow::Result<i64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO messages \
+             (session_id, role, content, tool_name, tool_calls, tool_call_id, token_count, finish_reason, timestamp) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                rec.session_id,
+                rec.role,
+                rec.content,
+                rec.tool_name,
+                rec.tool_calls,
+                rec.tool_call_id,
+                rec.token_count,
+                rec.finish_reason,
+                now
+            ],
+        )
+        .context("inserting message")?;
+        let id = tx.last_insert_rowid();
+        let bump_tool = rec.role == "tool" || rec.tool_calls.is_some();
+        if bump_tool {
+            tx.execute(
+                "UPDATE sessions SET message_count = message_count + 1, \
+                 tool_call_count = tool_call_count + 1 WHERE id = ?",
+                rusqlite::params![rec.session_id],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?",
+                rusqlite::params![rec.session_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(id)
     }
 }
 
@@ -217,5 +288,63 @@ mod tests {
         let store = SessionStore::open(&path).unwrap();
         store.create_session("s1", "cli", None, None).unwrap();
         assert!(store.create_session("s1", "cli", None, None).is_err());
+    }
+
+    #[test]
+    fn append_message_inserts_and_bumps_count() {
+        let path = schema_db();
+        let mut store = SessionStore::open(&path).unwrap();
+        store.create_session("s1", "cli", None, None).unwrap();
+
+        let mut rec = MessageRecord::new("s1", "user");
+        rec.content = Some("hello");
+        let id = store.append_message(&rec).unwrap();
+        assert!(id > 0);
+
+        let (role, content): (String, Option<String>) = store
+            .conn
+            .query_row(
+                "SELECT role, content FROM messages WHERE id = ?",
+                rusqlite::params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(role, "user");
+        assert_eq!(content.as_deref(), Some("hello"));
+
+        let (mc, tcc): (i64, i64) = store
+            .conn
+            .query_row(
+                "SELECT message_count, tool_call_count FROM sessions WHERE id='s1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(mc, 1);
+        assert_eq!(tcc, 0, "user 消息不递增 tool_call_count");
+    }
+
+    #[test]
+    fn append_tool_message_bumps_tool_call_count() {
+        let path = schema_db();
+        let mut store = SessionStore::open(&path).unwrap();
+        store.create_session("s1", "cli", None, None).unwrap();
+
+        let mut rec = MessageRecord::new("s1", "tool");
+        rec.content = Some("result");
+        rec.tool_name = Some("bash");
+        rec.tool_call_id = Some("call_1");
+        store.append_message(&rec).unwrap();
+
+        let (mc, tcc): (i64, i64) = store
+            .conn
+            .query_row(
+                "SELECT message_count, tool_call_count FROM sessions WHERE id='s1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(mc, 1);
+        assert_eq!(tcc, 1, "tool 消息递增 tool_call_count");
     }
 }
