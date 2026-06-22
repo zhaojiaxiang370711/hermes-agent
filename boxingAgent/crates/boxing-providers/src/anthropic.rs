@@ -57,10 +57,12 @@ impl Provider for Anthropic {
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
         let max_tokens = req.max_tokens.ok_or(ProviderError::MaxTokensRequired)?;
         let tools = anthropic_tools(req);
+        let (system, messages) = to_anthropic_messages(&req.messages);
         let body = AnthropicBody {
             model: &req.model,
             max_tokens,
-            messages: &req.messages,
+            messages,
+            system,
             stream: false,
             tools,
         };
@@ -104,10 +106,12 @@ impl Provider for Anthropic {
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
         let max_tokens = req.max_tokens.ok_or(ProviderError::MaxTokensRequired)?;
         let tools = anthropic_tools(req);
+        let (system, messages) = to_anthropic_messages(&req.messages);
         let body = AnthropicBody {
             model: &req.model,
             max_tokens,
-            messages: &req.messages,
+            messages,
+            system,
             stream: true,
             tools,
         };
@@ -149,10 +153,92 @@ fn anthropic_tools(req: &ChatRequest) -> Vec<AnthropicTool<'_>> {
 struct AnthropicBody<'a> {
     model: &'a str,
     max_tokens: u32,
-    messages: &'a [ChatMessage],
+    messages: Vec<AnthropicMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<String>,
     stream: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<AnthropicTool<'a>>,
+}
+
+#[derive(Serialize)]
+struct AnthropicMessage {
+    role: String,
+    content: AnthropicContent,
+}
+
+/// Anthropic 消息内容：纯文本字符串 或 content-blocks 数组。
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AnthropicContent {
+    Str(String),
+    Blocks(Vec<serde_json::Value>),
+}
+
+/// 转 Anthropic 线消息：system 抽到顶层；assistant 工具调用 → content blocks；
+/// 连续 tool 消息合并成一条 user/tool_result。
+fn to_anthropic_messages(msgs: &[ChatMessage]) -> (Option<String>, Vec<AnthropicMessage>) {
+    let mut system: Option<String> = None;
+    let mut out: Vec<AnthropicMessage> = Vec::new();
+    let mut pending: Vec<serde_json::Value> = Vec::new();
+    for m in msgs {
+        if m.role != "tool" {
+            flush_results(&mut out, &mut pending);
+        }
+        match m.role.as_str() {
+            "system" => {
+                if system.is_none() {
+                    system = Some(m.content.clone());
+                }
+            }
+            "user" => out.push(AnthropicMessage {
+                role: "user".into(),
+                content: AnthropicContent::Str(m.content.clone()),
+            }),
+            "assistant" => {
+                if let Some(tcs) = &m.tool_calls {
+                    let mut blocks = Vec::new();
+                    if !m.content.is_empty() {
+                        blocks.push(serde_json::json!({"type":"text","text":m.content}));
+                    }
+                    for tc in tcs {
+                        let input: serde_json::Value =
+                            serde_json::from_str(&tc.arguments).unwrap_or_default();
+                        blocks.push(serde_json::json!({
+                            "type":"tool_use","id":tc.id,"name":tc.name,"input":input
+                        }));
+                    }
+                    out.push(AnthropicMessage {
+                        role: "assistant".into(),
+                        content: AnthropicContent::Blocks(blocks),
+                    });
+                } else {
+                    out.push(AnthropicMessage {
+                        role: "assistant".into(),
+                        content: AnthropicContent::Str(m.content.clone()),
+                    });
+                }
+            }
+            "tool" => {
+                pending.push(serde_json::json!({
+                    "type":"tool_result",
+                    "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
+                    "content": m.content,
+                }));
+            }
+            _ => {}
+        }
+    }
+    flush_results(&mut out, &mut pending);
+    (system, out)
+}
+
+/// 把累积的 tool_result 冲刷成一条 user 消息。
+fn flush_results(out: &mut Vec<AnthropicMessage>, pending: &mut Vec<serde_json::Value>) {
+    if !pending.is_empty() {
+        let blocks = std::mem::take(pending);
+        out.push(AnthropicMessage { role: "user".into(), content: AnthropicContent::Blocks(blocks) });
+    }
 }
 
 #[derive(Serialize)]
@@ -401,6 +487,46 @@ mod tests {
         assert_eq!(resp.tool_calls[0].id, "tu_1");
         assert_eq!(resp.tool_calls[0].name, "read");
         assert_eq!(resp.tool_calls[0].arguments, "{\"path\":\"a.rs\"}");
+    }
+
+    #[tokio::test]
+    async fn complete_sends_tool_history_and_system() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "k"))
+            .and(body_string_contains("\"system\":\"SYS\""))
+            .and(body_string_contains("\"tool_use\""))
+            .and(body_string_contains("\"tool_result\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "text", "text": "done"}],
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            })))
+            .mount(&server)
+            .await;
+        let p = Anthropic::new(server.uri(), "k");
+        let mut r = ChatRequest::new("claude-test", vec![]);
+        r.max_tokens = Some(32);
+        r.messages.push(ChatMessage::new("system", "SYS"));
+        r.messages.push(ChatMessage::new("user", "list files"));
+        r.messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: "thinking".into(),
+            tool_calls: Some(vec![ToolCall {
+                id: "tu_1".into(),
+                name: "bash".into(),
+                arguments: "{\"command\":\"ls\"}".into(),
+            }]),
+            tool_call_id: None,
+        });
+        r.messages.push(ChatMessage {
+            role: "tool".into(),
+            content: "a.rs".into(),
+            tool_calls: None,
+            tool_call_id: Some("tu_1".into()),
+        });
+        let resp = p.complete(&r).await.unwrap();
+        assert_eq!(resp.content, "done");
     }
 
     #[tokio::test]
