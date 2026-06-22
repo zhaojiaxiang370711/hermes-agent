@@ -23,12 +23,12 @@ pub use anthropic::Anthropic;
 pub use openai::OpenAiCompat;
 pub use resolver::resolve;
 
-/// A streaming chat response: an owned, `Send` stream of token deltas.
+/// A streaming chat response: an owned, `Send` stream of `StreamEvent`s.
 ///
 /// Owned (no borrow on `&self` / `&ChatRequest`) so it can outlive the call and
 /// be driven by the agent loop's own task. reqwest's response byte stream is
 /// `'static + Send` once the `Response` is owned, which is how the impls build it.
-pub type ChatStream = Pin<Box<dyn Stream<Item = Result<TokenDelta, ProviderError>> + Send>>;
+pub type ChatStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, ProviderError>> + Send>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
@@ -104,16 +104,19 @@ pub struct ChatResponse {
     pub usage: Usage,
 }
 
-/// One chunk of a streamed response.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenDelta {
-    pub content: String,
+/// 从响应解析出的工具调用。arguments 为模型原样的 JSON 串（不在本层解析）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
 }
 
-impl TokenDelta {
-    pub fn new(content: impl Into<String>) -> Self {
-        Self { content: content.into() }
-    }
+/// 流式事件：文本分片 或 完成的工具调用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StreamEvent {
+    Text(String),
+    ToolCall(ToolCall),
 }
 
 /// A chat completion backend. Object-safe (`dyn Provider`).
@@ -121,7 +124,7 @@ impl TokenDelta {
 pub trait Provider: Send + Sync {
     /// 1-shot (non-streaming) completion.
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError>;
-    /// Streaming completion; yields token deltas in order.
+    /// Streaming completion; yields `StreamEvent`s in order.
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError>;
 }
 
@@ -185,8 +188,8 @@ mod tests {
             }
             async fn stream(&self, _req: &ChatRequest) -> Result<ChatStream, ProviderError> {
                 let s = futures::stream::iter(vec![
-                    Ok(TokenDelta::new("a")),
-                    Ok(TokenDelta::new("b")),
+                    Ok(StreamEvent::Text("a".into())),
+                    Ok(StreamEvent::Text("b".into())),
                 ]);
                 Ok(Box::pin(s))
             }
@@ -201,8 +204,10 @@ mod tests {
 
         let mut s = p.stream(&req).await.unwrap();
         let mut joined = String::new();
-        while let Some(delta) = s.next().await {
-            joined.push_str(&delta.unwrap().content);
+        while let Some(ev) = s.next().await {
+            if let StreamEvent::Text(t) = ev.unwrap() {
+                joined.push_str(&t);
+            }
         }
         assert_eq!(joined, "ab");
     }

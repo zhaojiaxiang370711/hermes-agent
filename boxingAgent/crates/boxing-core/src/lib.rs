@@ -5,13 +5,19 @@
 //! text. `run()` is structured as one `step()` today so future tool-use can
 //! branch inside the step without rewriting the loop.
 
-use boxing_providers::{ChatMessage, ChatRequest, Provider, ProviderError};
+use boxing_providers::{ChatMessage, ChatRequest, Provider, ProviderError, StreamEvent, ToolCall};
 use futures::StreamExt;
 
 pub struct Agent {
     provider: Box<dyn Provider>,
     model: String,
     system: String,
+}
+
+/// 一轮对话的输出（文本 + 模型请求的工具调用）。
+pub struct TurnOutput {
+    pub text: String,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl Agent {
@@ -28,32 +34,36 @@ impl Agent {
         &self,
         user_message: &str,
         on_delta: &mut impl FnMut(&str),
-    ) -> Result<String, ProviderError> {
+    ) -> Result<TurnOutput, ProviderError> {
         let mut messages = Vec::with_capacity(2);
         if !self.system.is_empty() {
             messages.push(ChatMessage::new("system", self.system.as_str()));
         }
         messages.push(ChatMessage::new("user", user_message));
-        let text = self.step(messages, on_delta).await?;
-        Ok(text)
+        self.step(messages, on_delta).await
     }
 
-    /// The single provider-call unit: stream a ChatRequest, render + accumulate.
+    /// 单次 provider 调用：流式拉取，Text 渲染+累积，ToolCall 收集。
     async fn step(
         &self,
         messages: Vec<ChatMessage>,
         on_delta: &mut impl FnMut(&str),
-    ) -> Result<String, ProviderError> {
+    ) -> Result<TurnOutput, ProviderError> {
         let mut req = ChatRequest::new(self.model.as_str(), messages);
         req.stream = true;
         let mut stream = self.provider.stream(&req).await?;
-        let mut out = String::new();
-        while let Some(delta) = stream.next().await {
-            let delta = delta?;
-            on_delta(&delta.content);
-            out.push_str(&delta.content);
+        let mut text = String::new();
+        let mut tool_calls = Vec::new();
+        while let Some(ev) = stream.next().await {
+            match ev? {
+                StreamEvent::Text(t) => {
+                    on_delta(&t);
+                    text.push_str(&t);
+                }
+                StreamEvent::ToolCall(tc) => tool_calls.push(tc),
+            }
         }
-        Ok(out)
+        Ok(TurnOutput { text, tool_calls })
     }
 }
 
@@ -82,10 +92,10 @@ mod tests {
             }
             async fn stream(&self, req: &ChatRequest) -> Result<boxing_providers::ChatStream, ProviderError> {
                 *self.last.lock().unwrap() = Some(req.clone());
-                let d: Vec<Result<boxing_providers::TokenDelta, ProviderError>> = self
+                let d: Vec<Result<boxing_providers::StreamEvent, ProviderError>> = self
                     .deltas
                     .iter()
-                    .map(|s| Ok(boxing_providers::TokenDelta::new((*s).to_string())))
+                    .map(|s| Ok(boxing_providers::StreamEvent::Text((*s).to_string())))
                     .collect();
                 Ok(Box::pin(futures::stream::iter(d)))
             }
@@ -120,8 +130,8 @@ mod tests {
     #[tokio::test]
     async fn run_returns_concatenated_deltas() {
         let (agent, _) = agent_with_capture("SYS", &["Hel", "lo", " world"]);
-        let text = agent.run("hi", &mut |_| {}).await.unwrap();
-        assert_eq!(text, "Hello world");
+        let turn = agent.run("hi", &mut |_| {}).await.unwrap();
+        assert_eq!(turn.text, "Hello world");
     }
 
     #[tokio::test]

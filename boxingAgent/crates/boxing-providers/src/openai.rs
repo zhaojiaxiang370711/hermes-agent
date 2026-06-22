@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::sse::SseLineStream;
 use crate::{
     ensure_success, ChatMessage, ChatRequest, ChatResponse, ChatStream, Provider, ProviderError,
-    TokenDelta, Usage,
+    StreamEvent, Usage,
 };
 
 #[derive(Clone)]
@@ -152,7 +152,7 @@ struct OpenAiDeltaStream<S: Unpin> {
 }
 
 impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for OpenAiDeltaStream<S> {
-    type Item = Result<TokenDelta, ProviderError>;
+    type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -174,7 +174,7 @@ impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for OpenAiD
                         .and_then(|c| c.delta.as_ref())
                         .and_then(|d| d.content.clone());
                     match text {
-                        Some(t) if !t.is_empty() => return Poll::Ready(Some(Ok(TokenDelta::new(t)))),
+                        Some(t) if !t.is_empty() => return Poll::Ready(Some(Ok(StreamEvent::Text(t)))),
                         _ => continue,
                     }
                 }
@@ -256,8 +256,10 @@ mod tests {
         let p = OpenAiCompat::new(server.uri(), "k");
         let mut s = p.stream(&req()).await.unwrap();
         let mut out = String::new();
-        while let Some(d) = s.next().await {
-            out.push_str(&d.unwrap().content);
+        while let Some(ev) = s.next().await {
+            if let StreamEvent::Text(t) = ev.unwrap() {
+                out.push_str(&t);
+            }
         }
         assert_eq!(out, "Hello");
     }

@@ -80,11 +80,17 @@ async fn run_chat(
     let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
 
     let agent = boxing_core::Agent::new(provider, model, system);
-    agent
+    let out = agent
         .run(&message, &mut |delta| print!("{delta}"))
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     println!();
+    if !out.tool_calls.is_empty() {
+        eprintln!(
+            "boxing-agent: 模型请求 {} 个工具（执行在 Phase 2d）",
+            out.tool_calls.len()
+        );
+    }
     Ok(())
 }
 
