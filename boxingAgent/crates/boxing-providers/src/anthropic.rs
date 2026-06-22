@@ -1,11 +1,13 @@
 //! Anthropic Messages API provider.
 //!
-//! Hits `{base_url}/v1/messages` with `x-api-key` + `anthropic-version`
-//! headers. Non-stream returns `content[0].text` + `usage` (input/output
-//! tokens); streaming is SSE with typed events — token deltas arrive as
-//! `content_block_delta` (`delta.text`), the stream ends on `message_stop`.
-//! `max_tokens` is required by the API and enforced up front.
+//! Hits `{base_url}/v1/messages` with `x-api-key` + `anthropic-version` headers.
+//! Non-stream: `content[]` 文本块 + `tool_use` 块 + `usage`；流式：SSE 事件——
+//! 文本走 `content_block_delta`(`text_delta`)，工具调用经
+//! `content_block_start`(`tool_use`) + `content_block_delta`(`input_json_delta`)
+//! 累积，`content_block_stop` 时发 `StreamEvent::ToolCall`，`message_stop` 结束。
+//! `max_tokens` 必填。
 
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -16,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::sse::SseLineStream;
 use crate::{
     ensure_success, ChatMessage, ChatRequest, ChatResponse, ChatStream, Provider, ProviderError,
-    StreamEvent, Usage,
+    StreamEvent, ToolCall, Usage,
 };
 
 #[derive(Clone)]
@@ -54,11 +56,13 @@ impl Anthropic {
 impl Provider for Anthropic {
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
         let max_tokens = req.max_tokens.ok_or(ProviderError::MaxTokensRequired)?;
+        let tools = anthropic_tools(req);
         let body = AnthropicBody {
             model: &req.model,
             max_tokens,
             messages: &req.messages,
             stream: false,
+            tools,
         };
         let resp = self
             .client
@@ -74,21 +78,38 @@ impl Provider for Anthropic {
             .content
             .first()
             .and_then(|b| b.text.clone())
-            .ok_or(ProviderError::Missing("content[0].text"))?;
+            .unwrap_or_default();
+        let tool_calls = parsed
+            .content
+            .iter()
+            .filter(|b| b.kind.as_deref() == Some("tool_use"))
+            .filter_map(|b| {
+                let id = b.id.clone()?;
+                let name = b.name.clone()?;
+                let arguments = b
+                    .input
+                    .as_ref()
+                    .map(|v| serde_json::to_string(v).unwrap_or_default())
+                    .unwrap_or_default();
+                Some(ToolCall { id, name, arguments })
+            })
+            .collect();
         let usage = parsed
             .usage
             .map(|u| Usage { input_tokens: u.input_tokens, output_tokens: u.output_tokens })
             .unwrap_or_default();
-        Ok(ChatResponse { content, usage, tool_calls: vec![] })
+        Ok(ChatResponse { content, usage, tool_calls })
     }
 
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
         let max_tokens = req.max_tokens.ok_or(ProviderError::MaxTokensRequired)?;
+        let tools = anthropic_tools(req);
         let body = AnthropicBody {
             model: &req.model,
             max_tokens,
             messages: &req.messages,
             stream: true,
+            tools,
         };
         let resp = self
             .client
@@ -100,12 +121,28 @@ impl Provider for Anthropic {
             .await?;
         let resp = ensure_success(resp).await?;
         let bytes = resp.bytes_stream();
-        let deltas = AnthropicDeltaStream { lines: SseLineStream::new(bytes) };
+        let deltas = AnthropicDeltaStream {
+            lines: SseLineStream::new(bytes),
+            blocks: HashMap::new(),
+            pending: VecDeque::new(),
+        };
         Ok(Box::pin(deltas))
     }
 }
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// 从 `ChatRequest.tools` 构建 Anthropic tools（input_schema 包装）。
+fn anthropic_tools(req: &ChatRequest) -> Vec<AnthropicTool<'_>> {
+    req.tools
+        .iter()
+        .map(|t| AnthropicTool {
+            name: t.name.as_str(),
+            description: t.description.as_str(),
+            input_schema: &t.parameters,
+        })
+        .collect()
+}
 
 /// Wire body for `/v1/messages`.
 #[derive(Serialize)]
@@ -114,12 +151,29 @@ struct AnthropicBody<'a> {
     max_tokens: u32,
     messages: &'a [ChatMessage],
     stream: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<AnthropicTool<'a>>,
+}
+
+#[derive(Serialize)]
+struct AnthropicTool<'a> {
+    name: &'a str,
+    description: &'a str,
+    input_schema: &'a serde_json::Value,
 }
 
 #[derive(Deserialize)]
 struct AnthropicBlock {
     #[serde(default)]
     text: Option<String>,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -138,62 +192,144 @@ struct AnthropicResponse {
     usage: Option<AnthropicUsage>,
 }
 
-/// One SSE event from the streaming Messages API (only the fields we act on).
+/// `content_block_start` 中的 content_block（只取我们关心的字段）。
+#[derive(Deserialize)]
+struct AnthropicBlockStart {
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// One SSE event (only the fields we act on).
 #[derive(Deserialize)]
 struct AnthropicEvent {
     #[serde(rename = "type")]
     kind: Option<String>,
+    #[serde(default)]
+    index: Option<u64>,
+    #[serde(default)]
+    content_block: Option<AnthropicBlockStart>,
     #[serde(default)]
     delta: Option<AnthropicDelta>,
 }
 
 #[derive(Deserialize)]
 struct AnthropicDelta {
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     kind: Option<String>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    partial_json: Option<String>,
 }
 
-/// Parses the SSE line stream into token deltas: emits the `text` of each
-/// `content_block_delta` (text_delta) and terminates on `message_stop`.
+/// 按 index 累积的 tool_use 块。
+struct ToolCallAccum {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+/// 解析 SSE 行流：`text_delta` → `StreamEvent::Text`；`tool_use` 块经
+/// `content_block_start` + `input_json_delta` 累积，`content_block_stop` 时
+/// 发 `StreamEvent::ToolCall`；`message_stop` 结束。
 struct AnthropicDeltaStream<S: Unpin> {
     lines: SseLineStream<S>,
+    blocks: HashMap<u64, ToolCallAccum>,
+    pending: VecDeque<ToolCall>,
 }
 
 impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for AnthropicDeltaStream<S> {
     type Item = Result<StreamEvent, ProviderError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let me = &mut *self;
         loop {
-            match Pin::new(&mut self.lines).poll_next(cx) {
+            if let Some(tc) = me.pending.pop_front() {
+                return Poll::Ready(Some(Ok(StreamEvent::ToolCall(tc))));
+            }
+            match Pin::new(&mut me.lines).poll_next(cx) {
                 Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if me.pending.is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    continue;
+                }
                 Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
                 Poll::Ready(Some(Ok(payload))) => {
                     if payload == "[DONE]" {
-                        return Poll::Ready(None);
+                        continue; // Anthropic 用 message_stop，兼容 [DONE]
                     }
                     let event: AnthropicEvent = match serde_json::from_str(&payload) {
                         Ok(e) => e,
                         Err(e) => return Poll::Ready(Some(Err(ProviderError::Decode(e)))),
                     };
                     match event.kind.as_deref() {
-                        Some("message_stop") => return Poll::Ready(None),
-                        Some("content_block_delta") => {
-                            let text = event.delta.as_ref().and_then(|d| {
-                                if d.kind.as_deref() == Some("text_delta") {
-                                    d.text.clone()
-                                } else {
-                                    None
-                                }
-                            });
-                            match text {
-                                Some(t) if !t.is_empty() => {
-                                    return Poll::Ready(Some(Ok(StreamEvent::Text(t))))
-                                }
-                                _ => continue,
+                        Some("message_stop") => {
+                            if me.pending.is_empty() {
+                                return Poll::Ready(None);
                             }
+                            continue;
+                        }
+                        Some("content_block_start") => {
+                            if let (Some(idx), Some(cb)) = (event.index, event.content_block.as_ref())
+                            {
+                                if cb.kind.as_deref() == Some("tool_use") {
+                                    me.blocks.insert(
+                                        idx,
+                                        ToolCallAccum {
+                                            id: cb.id.clone().unwrap_or_default(),
+                                            name: cb.name.clone().unwrap_or_default(),
+                                            arguments: String::new(),
+                                        },
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+                        Some("content_block_delta") => {
+                            if let Some(d) = event.delta.as_ref() {
+                                match d.kind.as_deref() {
+                                    Some("text_delta") => {
+                                        // 文本无需 index（单一文本流）
+                                        if let Some(t) = d.text.as_ref() {
+                                            if !t.is_empty() {
+                                                return Poll::Ready(Some(Ok(StreamEvent::Text(
+                                                    t.clone(),
+                                                ))));
+                                            }
+                                        }
+                                    }
+                                    Some("input_json_delta") => {
+                                        // 工具入参按 index 累积到对应块
+                                        if let (Some(idx), Some(p)) =
+                                            (event.index, d.partial_json.as_ref())
+                                        {
+                                            if let Some(b) = me.blocks.get_mut(&idx) {
+                                                b.arguments.push_str(p);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            continue;
+                        }
+                        Some("content_block_stop") => {
+                            if let Some(idx) = event.index {
+                                if let Some(a) = me.blocks.remove(&idx) {
+                                    me.pending.push_back(ToolCall {
+                                        id: a.id,
+                                        name: a.name,
+                                        arguments: a.arguments,
+                                    });
+                                }
+                            }
+                            continue;
                         }
                         _ => continue,
                     }
@@ -206,6 +342,7 @@ impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for Anthrop
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ToolDef;
     use futures::StreamExt;
     use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -235,11 +372,39 @@ mod tests {
         assert_eq!(resp.content, "hello there");
         assert_eq!(resp.usage.input_tokens, Some(8));
         assert_eq!(resp.usage.output_tokens, Some(2));
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn complete_parses_tool_use_and_sends_tools() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "k"))
+            .and(body_string_contains("\"input_schema\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content": [{"type": "tool_use", "id": "tu_1", "name": "read", "input": {"path": "a.rs"}}],
+                "usage": {"input_tokens": 8, "output_tokens": 2}
+            })))
+            .mount(&server)
+            .await;
+
+        let p = Anthropic::new(server.uri(), "k");
+        let mut r = req();
+        r.tools.push(ToolDef {
+            name: "read".into(),
+            description: "read".into(),
+            parameters: serde_json::json!({"type": "object"}),
+        });
+        let resp = p.complete(&r).await.unwrap();
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "tu_1");
+        assert_eq!(resp.tool_calls[0].name, "read");
+        assert_eq!(resp.tool_calls[0].arguments, "{\"path\":\"a.rs\"}");
     }
 
     #[tokio::test]
     async fn complete_requires_max_tokens() {
-        // max_tokens is mandatory for the Messages API; enforced before any HTTP.
         let mut req = ChatRequest::new("claude-test", vec![ChatMessage::new("user", "hi")]);
         req.max_tokens = None;
         let p = Anthropic::new("http://0.0.0.0:0", "k");
@@ -254,7 +419,6 @@ mod tests {
         let mut req = ChatRequest::new("claude-test", vec![ChatMessage::new("user", "hi")]);
         req.max_tokens = None;
         let p = Anthropic::new("http://0.0.0.0:0", "k");
-        // ChatStream isn't Debug (dyn Stream), so pattern-match instead of unwrap_err.
         match p.stream(&req).await {
             Err(ProviderError::MaxTokensRequired) => {}
             Err(e) => panic!("expected MaxTokensRequired, got {e:?}"),
@@ -296,5 +460,42 @@ mod tests {
             }
         }
         assert_eq!(out, "Hello");
+    }
+
+    #[tokio::test]
+    async fn stream_yields_tool_call_event() {
+        let server = MockServer::start().await;
+        let sse = concat!(
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"read\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"a\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\".rs\\\"}\"}}\n\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )
+        .to_string();
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "k"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"))
+            .mount(&server)
+            .await;
+
+        let p = Anthropic::new(server.uri(), "k");
+        let mut s = p.stream(&req()).await.unwrap();
+        let mut tcs = Vec::new();
+        while let Some(ev) = s.next().await {
+            if let StreamEvent::ToolCall(tc) = ev.unwrap() {
+                tcs.push(tc);
+            }
+        }
+        assert_eq!(tcs.len(), 1);
+        assert_eq!(tcs[0].id, "tu_1");
+        assert_eq!(tcs[0].name, "read");
+        assert_eq!(tcs[0].arguments, "{\"path\":\"a.rs\"}");
     }
 }
