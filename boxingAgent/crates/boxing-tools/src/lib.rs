@@ -13,6 +13,7 @@ pub mod grep;
 pub mod ls;
 pub mod memory;
 pub mod read;
+pub mod search;
 pub mod todo;
 pub mod write;
 
@@ -23,6 +24,7 @@ pub use grep::Grep;
 pub use ls::Ls;
 pub use memory::Memory;
 pub use read::Read;
+pub use search::SessionSearch;
 pub use todo::Todo;
 pub use write::Write;
 
