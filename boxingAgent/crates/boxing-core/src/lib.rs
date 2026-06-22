@@ -17,7 +17,9 @@ use futures::StreamExt;
 use std::sync::{Arc, Mutex};
 
 pub mod delegate;
+pub mod memory_injector;
 pub use delegate::Delegate;
+pub use memory_injector::MemoryInjector;
 
 pub struct Agent {
     provider: Arc<dyn Provider>,
@@ -27,6 +29,7 @@ pub struct Agent {
     max_turns: usize,
     max_tokens: u32,
     store: Option<Mutex<SessionStore>>,
+    memory_injector: Option<MemoryInjector>,
 }
 
 /// 一轮 provider 调用的输出。
@@ -59,12 +62,18 @@ impl Agent {
         max_turns: usize,
         max_tokens: u32,
     ) -> Self {
-        Self { provider, model, system, tools, max_turns, max_tokens, store: None }
+        Self { provider, model, system, tools, max_turns, max_tokens, store: None, memory_injector: None }
     }
 
     /// 启用状态持久化（builder 模式）。
     pub fn with_store(mut self, store: SessionStore) -> Self {
         self.store = Some(Mutex::new(store));
+        self
+    }
+
+    /// 启用记忆自动注入（builder 模式）。
+    pub fn with_memory(mut self, memory_injector: MemoryInjector) -> Self {
+        self.memory_injector = Some(memory_injector);
         self
     }
 
@@ -91,8 +100,20 @@ impl Agent {
         }
 
         let mut messages: Vec<ChatMessage> = Vec::new();
-        if !self.system.is_empty() {
-            let sys_msg = ChatMessage::new("system", self.system.as_str());
+
+        // 构建系统提示（含记忆注入）
+        let effective_system = if let Some(injector) = &self.memory_injector {
+            if let Some(memory_block) = injector.build_memory_block() {
+                format!("{}\n\n{}", self.system, memory_block)
+            } else {
+                self.system.clone()
+            }
+        } else {
+            self.system.clone()
+        };
+
+        if !effective_system.is_empty() {
+            let sys_msg = ChatMessage::new("system", effective_system.as_str());
             persist_msg(&self.store, &session_id, &sys_msg)?;
             messages.push(sys_msg);
         }

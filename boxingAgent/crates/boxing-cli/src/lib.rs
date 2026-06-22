@@ -114,6 +114,18 @@ async fn run_chat(
         .unwrap_or(30);
     let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns, max_tokens);
     let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
+
+    // 启用记忆自动注入
+    let hermes_home = match boxing_config::hermes_home() {
+        Ok(h) => h,
+        Err(_) => {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            std::path::PathBuf::from(home).join(".hermes")
+        }
+    };
+    let memory_injector = boxing_core::MemoryInjector::load(&hermes_home);
+    agent = agent.with_memory(memory_injector);
+
     match boxing_state::SessionStore::open(&boxing_config::state_db_path()?) {
         Ok(store) => {
             agent = agent.with_store(store);
