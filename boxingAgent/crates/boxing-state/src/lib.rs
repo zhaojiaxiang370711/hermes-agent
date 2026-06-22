@@ -1,7 +1,6 @@
-//! Read-only access to the shared ~/.hermes/state.db (Phase 1b: sessions).
+//! 对共享 ~/.hermes/state.db 的读写访问（Phase 1b：读；Phase 2b：写）。
 //!
-//! Opens the same SQLite file the Python original writes; never creates or
-//! mutates tables. Phase 2 adds writes when the agent loop needs them.
+//! 打开 Python 原版写入的同一 SQLite 文件，读写 + WAL；从不建表/改表结构。
 
 use anyhow::Context;
 use rusqlite::OpenFlags;
@@ -22,15 +21,17 @@ pub struct SessionStore {
 }
 
 impl SessionStore {
-    /// Open the shared state.db read-only. busy_timeout absorbs transient locks
-    /// from a concurrently-writing Python process (WAL allows concurrent readers).
+    /// 打开共享 state.db（读写 + WAL）。busy_timeout 吸收并发写入方的瞬时锁。
+    /// 文件不存在则报错（共享 db 已由 Python 工具创建）。
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         let conn = rusqlite::Connection::open_with_flags(
             path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .with_context(|| format!("opening state db {}", path.display()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .context("setting WAL journal mode")?;
         Ok(Self { conn })
     }
 
@@ -130,5 +131,17 @@ mod tests {
         let store = SessionStore::open(&path).unwrap();
         assert_eq!(store.session_count().unwrap(), 0);
         assert!(store.session_summaries().unwrap().is_empty());
+    }
+
+    #[test]
+    fn open_is_read_write_and_wal() {
+        let path = fixture();
+        let store = SessionStore::open(&path).unwrap();
+        let mode: String = store
+            .conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "应为 WAL 日志模式");
+        assert_eq!(store.session_count().unwrap(), 2); // 读仍可用
     }
 }
