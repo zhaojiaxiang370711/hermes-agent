@@ -1,5 +1,5 @@
 # Phase 0 catalog: boxingAgent 默认工具集。
-# 12 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
+# 13 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
 # 每个工具：name / params / return / side effects。实现以此为准。
 
 tools:
@@ -38,6 +38,10 @@ tools:
   - name: vision
     params: [image_url, question?]
     return: "图片的文字描述/回答"
+    side_effects: none
+  - name: web_search
+    params: [query, limit?]
+    return: "JSON（success, data.web[{title, url, description, position}]）"
     side_effects: none
   - name: todo
     params: [todos?, merge?]
