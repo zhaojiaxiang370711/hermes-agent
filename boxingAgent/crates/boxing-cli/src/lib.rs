@@ -110,6 +110,17 @@ pub enum McpAction {
         /// Server name to re-authenticate.
         name: String,
     },
+    /// Interactively configure which tools are enabled for an MCP server.
+    Configure {
+        /// Server name to configure.
+        name: String,
+        /// Enable all tools (non-interactive).
+        #[arg(short = 'a', long)]
+        all: bool,
+        /// Disable all tools (non-interactive).
+        #[arg(long)]
+        none: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -588,6 +599,117 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
                     anyhow::bail!("OAuth 授权失败: {e}");
                 }
             }
+        }
+
+        McpAction::Configure { name, all, none } => {
+            let mcp_yaml = doc.get("mcp_servers").unwrap_or_default();
+            let servers: HashMap<String, boxing_tools::mcp::McpServerConfig> =
+                serde_yaml::from_str(&mcp_yaml)
+                    .map_err(|e| anyhow::anyhow!("解析 mcp_servers 失败: {e}"))?;
+
+            let config = servers
+                .get(&name)
+                .ok_or_else(|| anyhow::anyhow!("服务器 '{name}' 不在配置中"))?;
+
+            println!("\n  连接 '{name}' 发现工具...");
+
+            let client = boxing_tools::mcp::McpClient::connect(&name, config)
+                .map_err(|e| anyhow::anyhow!("连接失败: {e}"))?;
+            let tools = client
+                .list_tools()
+                .map_err(|e| anyhow::anyhow!("tools/list 失败: {e}"))?;
+
+            if tools.is_empty() {
+                println!("  服务器没有工具。");
+                return Ok(());
+            }
+
+            // 非交互模式
+            if all {
+                doc.remove_key(&format!("mcp_servers.{name}.tools"))
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                boxing_config::save(&config_path, &doc)?;
+                println!("  ✓ 已启用全部 {} 个工具", tools.len());
+                return Ok(());
+            }
+            if none {
+                let mut tools_map = serde_yaml::Mapping::new();
+                tools_map.insert(
+                    serde_yaml::Value::String("include".into()),
+                    serde_yaml::Value::Sequence(vec![]),
+                );
+                doc.set_yaml(
+                    &format!("mcp_servers.{name}.tools"),
+                    serde_yaml::Value::Mapping(tools_map),
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                boxing_config::save(&config_path, &doc)?;
+                println!("  ✓ 已禁用全部 {} 个工具", tools.len());
+                return Ok(());
+            }
+
+            // 交互模式：编号列表
+            println!("\n  {name} 提供 {} 个工具：\n", tools.len());
+            for (i, t) in tools.iter().enumerate() {
+                let desc: String = t.description.chars().take(60).collect();
+                println!("  [{i:>2}] {:<24} — {desc}", t.name);
+            }
+
+            println!("\n  输入要启用的工具编号（逗号分隔，a=全部，q=取消）：");
+            print!("  > ");
+            std::io::stdout().flush().ok();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            let input = input.trim();
+
+            if input.eq_ignore_ascii_case("q") || input.is_empty() {
+                println!("已取消。");
+                return Ok(());
+            }
+
+            let selected: Vec<usize> = if input.eq_ignore_ascii_case("a") {
+                (0..tools.len()).collect()
+            } else {
+                input
+                    .split(',')
+                    .filter_map(|s| s.trim().parse::<usize>().ok())
+                    .filter(|&i| i < tools.len())
+                    .collect()
+            };
+
+            if selected.is_empty() {
+                println!("未选择任何工具。");
+                return Ok(());
+            }
+
+            // 写入 config
+            if selected.len() == tools.len() {
+                // 全选 → 移除 tools 过滤器
+                doc.remove_key(&format!("mcp_servers.{name}.tools"))
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+            } else {
+                let include_list: Vec<serde_yaml::Value> = selected
+                    .iter()
+                    .map(|&i| serde_yaml::Value::String(tools[i].name.clone()))
+                    .collect();
+                let mut tools_map = serde_yaml::Mapping::new();
+                tools_map.insert(
+                    serde_yaml::Value::String("include".into()),
+                    serde_yaml::Value::Sequence(include_list),
+                );
+                doc.set_yaml(
+                    &format!("mcp_servers.{name}.tools"),
+                    serde_yaml::Value::Mapping(tools_map),
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            }
+            boxing_config::save(&config_path, &doc)?;
+            println!(
+                "\n  ✓ 已配置：{}/{} 个工具启用",
+                selected.len(),
+                tools.len()
+            );
+            println!("  启动新会话后生效。");
         }
     }
 
