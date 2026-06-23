@@ -769,8 +769,8 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
             } else {
                 println!("\n  定时任务：\n");
                 println!(
-                    "  {:<12} {:<14} {:<10} {:<20} {}",
-                    "ID", "名称", "状态", "下次运行", "Schedule"
+                    "  {:<12} {:<14} {:<10} {:<20} Schedule",
+                    "ID", "名称", "状态", "下次运行"
                 );
                 println!(
                     "  {} {} {} {} {}",

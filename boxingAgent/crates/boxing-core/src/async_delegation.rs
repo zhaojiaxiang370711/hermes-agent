@@ -9,7 +9,8 @@
 //! 使用 tokio::sync::mpsc 替代 Python 的 queue。
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use serde::Serialize;
@@ -46,8 +47,8 @@ pub struct AsyncDelegationRegistry {
     tasks: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     /// 完成队列发送端
     tx: mpsc::Sender<CompletedDelegation>,
-    /// 完成队列接收端（由调用方轮询）
-    rx: Arc<Mutex<mpsc::Receiver<CompletedDelegation>>>,
+    /// 完成队列接收端（由调用方轮询），使用 tokio::sync::Mutex 保护
+    rx: Arc<tokio::sync::Mutex<mpsc::Receiver<CompletedDelegation>>>,
 }
 
 impl Default for AsyncDelegationRegistry {
@@ -62,11 +63,12 @@ impl AsyncDelegationRegistry {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             tx,
-            rx: Arc::new(Mutex::new(rx)),
+            rx: Arc::new(tokio::sync::Mutex::new(rx)),
         }
     }
 
     /// 分派一个异步委托任务。
+    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &self,
         delegation_id: String,
@@ -127,13 +129,13 @@ impl AsyncDelegationRegistry {
     }
 
     /// 尝试从完成队列接收一个已完成的委托（非阻塞）。
-    pub fn try_recv(&self) -> Option<CompletedDelegation> {
-        self.rx.lock().unwrap().try_recv().ok()
+    pub async fn try_recv(&self) -> Option<CompletedDelegation> {
+        self.rx.lock().await.try_recv().ok()
     }
 
     /// 阻塞等待一个已完成的委托。
     pub async fn recv(&self) -> Option<CompletedDelegation> {
-        self.rx.lock().unwrap().recv().await
+        self.rx.lock().await.recv().await
     }
 
     /// 获取当前活跃的后台任务数。

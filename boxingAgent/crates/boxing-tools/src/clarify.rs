@@ -155,7 +155,6 @@ fn prompt_open(question: &str) -> Result<String, ToolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[tokio::test]
     async fn schema_is_valid() {

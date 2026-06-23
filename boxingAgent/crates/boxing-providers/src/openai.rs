@@ -1,9 +1,9 @@
 //! OpenAI-compatible chat completions provider.
 //!
-//! Hits `{base_url}/chat/completions`. Non-stream: `choices[0].message.content`
-//! + `tool_calls` + `usage`; streaming: SSE `data:` lines — 文本走
-//! `delta.content`，工具调用按 index 累积 `delta.tool_calls`，`[DONE]` 时
-//! 发 `StreamEvent::ToolCall`。
+//! Hits `{base_url}/chat/completions`.
+//! Non-stream: `choices[0].message.content` + `tool_calls` + `usage`;
+//! streaming: SSE `data:` lines — 文本走 `delta.content`，工具调用按
+//! index 累积 `delta.tool_calls`，`[DONE]` 时发 `StreamEvent::ToolCall`。
 
 use std::collections::VecDeque;
 use std::pin::Pin;

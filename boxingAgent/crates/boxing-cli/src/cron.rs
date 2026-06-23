@@ -144,13 +144,11 @@ impl CronSchedule {
                 return after + 86400.0; // 回退：24h 后重试
             }
 
-            if self.months.contains(&(dt.month() as u32))
-                && self.days.contains(&(dt.day() as u32))
-                && self
-                    .weekdays
-                    .contains(&(dt.weekday().num_days_from_sunday()))
-                && self.hours.contains(&(dt.hour() as u32))
-                && self.minutes.contains(&(dt.minute() as u32))
+            if self.months.contains(&dt.month())
+                && self.days.contains(&dt.day())
+                && self.weekdays.contains(&dt.weekday().num_days_from_sunday())
+                && self.hours.contains(&dt.hour())
+                && self.minutes.contains(&dt.minute())
             {
                 return dt.timestamp() as f64;
             }
@@ -185,10 +183,7 @@ pub fn load_jobs() -> Vec<CronJob> {
         Ok(t) => t,
         Err(_) => return Vec::new(),
     };
-    match serde_json::from_str::<Vec<CronJob>>(&text) {
-        Ok(jobs) => jobs,
-        Err(_) => Vec::new(),
-    }
+    serde_json::from_str::<Vec<CronJob>>(&text).unwrap_or_default()
 }
 
 /// 保存所有 jobs。

@@ -75,6 +75,12 @@ pub struct AcpServer {
     next_session: std::sync::atomic::AtomicU64,
 }
 
+impl Default for AcpServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AcpServer {
     pub fn new() -> Self {
         Self {
