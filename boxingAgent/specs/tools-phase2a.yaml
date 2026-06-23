@@ -1,5 +1,5 @@
 # Phase 0 catalog: boxingAgent 默认工具集。
-# 15 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
+# 16 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
 # 每个工具：name / params / return / side effects。实现以此为准。
 
 tools:
@@ -47,6 +47,10 @@ tools:
     params: [prompt, aspect_ratio?]
     return: "JSON（success, image: url, model）"
     side_effects: none
+  - name: text_to_speech
+    params: [text, output_path?]
+    return: "JSON（success, file_path, media: MEDIA:<path>）"
+    side_effects: "写入音频文件到 ~/.hermes/audio_cache/"
   - name: execute_code
     params: [code, timeout?, max_tool_calls?]
     return: "JSON（stdout, stderr?, exit_code, tool_calls_made）"
