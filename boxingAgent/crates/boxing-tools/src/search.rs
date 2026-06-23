@@ -56,9 +56,7 @@ impl Tool for SessionSearch {
 
         // Scroll 模式：推迟
         if session_id.is_some() && around.is_some() {
-            return Ok(
-                "scroll 模式尚未支持，请使用 discovery（带 query）或 browse 模式".into(),
-            );
+            return Ok("scroll 模式尚未支持，请使用 discovery（带 query）或 browse 模式".into());
         }
 
         let conn = rusqlite::Connection::open_with_flags(
@@ -68,7 +66,12 @@ impl Tool for SessionSearch {
         .map_err(|e| ToolError::Other(format!("打开 state.db 失败: {e}")))?;
 
         if !query.is_empty() {
-            discovery(&conn, query, limit, args.get("sort").and_then(|v| v.as_str()))
+            discovery(
+                &conn,
+                query,
+                limit,
+                args.get("sort").and_then(|v| v.as_str()),
+            )
         } else {
             browse(&conn, limit)
         }

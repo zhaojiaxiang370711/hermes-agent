@@ -138,14 +138,23 @@ impl PkcePair {
         hasher.update(verifier.as_bytes());
         let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
 
-        Self { verifier, challenge }
+        Self {
+            verifier,
+            challenge,
+        }
     }
 }
 
 /// 生成随机 state 参数（防 CSRF）。
 fn generate_state() -> String {
     let mut hasher = Sha256::new();
-    hasher.update(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().to_string());
+    hasher.update(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .to_string(),
+    );
     hasher.update(b"boxing-oauth-state");
     URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
@@ -259,7 +268,12 @@ pub struct OAuthClient {
 }
 
 impl OAuthClient {
-    pub fn new(server_url: &str, config: &OAuthConfig, hermes_home: &Path, server_name: &str) -> Self {
+    pub fn new(
+        server_url: &str,
+        config: &OAuthConfig,
+        hermes_home: &Path,
+        server_name: &str,
+    ) -> Self {
         Self {
             server_url: server_url.to_string(),
             config: config.clone(),
@@ -315,7 +329,9 @@ impl OAuthClient {
                 // 另一个调用方正在恢复相同 token — 不重复
                 // 在同步代码中，到达这里意味着前一个恢复已完成（锁已释放）
                 // 重新检查是否有新 token
-                return self.storage.load_tokens()
+                return self
+                    .storage
+                    .load_tokens()
                     .map(|t| !t.is_expired())
                     .unwrap_or(false);
             }
@@ -574,7 +590,9 @@ impl OAuthClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().unwrap_or_default();
-            return Err(ToolError::Other(format!("Token 交换 HTTP {status}: {text}")));
+            return Err(ToolError::Other(format!(
+                "Token 交换 HTTP {status}: {text}"
+            )));
         }
 
         let data: Value = resp
@@ -586,9 +604,10 @@ impl OAuthClient {
 
     /// 用 refresh_token 刷新 access_token。
     fn refresh_token(&self, token: &StoredToken) -> Result<StoredToken, ToolError> {
-        let metadata = self.storage.load_metadata().ok_or_else(|| {
-            ToolError::Other("OAuth: 无缓存的元数据，无法刷新 token".into())
-        })?;
+        let metadata = self
+            .storage
+            .load_metadata()
+            .ok_or_else(|| ToolError::Other("OAuth: 无缓存的元数据，无法刷新 token".into()))?;
 
         let refresh_token = token
             .refresh_token
@@ -598,9 +617,13 @@ impl OAuthClient {
         let body = vec![
             ("grant_type", "refresh_token".to_string()),
             ("refresh_token", refresh_token.clone()),
-            ("client_id", self.storage.load_client_info()
-                .map(|c| c.client_id)
-                .unwrap_or_else(|| self.config.client_id.clone())),
+            (
+                "client_id",
+                self.storage
+                    .load_client_info()
+                    .map(|c| c.client_id)
+                    .unwrap_or_else(|| self.config.client_id.clone()),
+            ),
         ];
 
         let resp = self
@@ -613,7 +636,9 @@ impl OAuthClient {
         if !resp.status().is_success() {
             // Token 刷新失败 — 清除缓存，下次需要重新授权
             self.storage.remove();
-            return Err(ToolError::Other("Token 刷新失败，已清除缓存，需要重新授权".into()));
+            return Err(ToolError::Other(
+                "Token 刷新失败，已清除缓存，需要重新授权".into(),
+            ));
         }
 
         let data: Value = resp
@@ -661,10 +686,7 @@ fn parse_token_response(data: &Value) -> Result<StoredToken, ToolError> {
             .and_then(|v| v.as_str())
             .map(String::from),
         expires_at: now + expires_in,
-        scope: data
-            .get("scope")
-            .and_then(|v| v.as_str())
-            .map(String::from),
+        scope: data.get("scope").and_then(|v| v.as_str()).map(String::from),
     })
 }
 
@@ -760,9 +782,7 @@ fn wait_for_callback(port: u16, expected_state: &str) -> Result<String, ToolErro
 
         // 超时检查
         if SystemTime::now() > deadline {
-            return Err(ToolError::Other(
-                "OAuth 回调超时（5 分钟无响应）".into(),
-            ));
+            return Err(ToolError::Other("OAuth 回调超时（5 分钟无响应）".into()));
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));

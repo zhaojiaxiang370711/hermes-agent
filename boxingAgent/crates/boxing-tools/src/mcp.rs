@@ -24,10 +24,29 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 // ===== 安全 =====
 
 const SAFE_ENV_KEYS: &[&str] = &[
-    "PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR",
-    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PUBLIC",
-    "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "USERNAME", "USERPROFILE",
-    "WINDIR", "COMSPEC", "OS", "PATHEXT",
+    "PATH",
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "SHELL",
+    "TMPDIR",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PUBLIC",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "USERNAME",
+    "USERPROFILE",
+    "WINDIR",
+    "COMSPEC",
+    "OS",
+    "PATHEXT",
 ];
 
 fn build_safe_env(user_env: Option<&HashMap<String, String>>) -> HashMap<String, String> {
@@ -47,7 +66,15 @@ fn build_safe_env(user_env: Option<&HashMap<String, String>>) -> HashMap<String,
 
 fn sanitize_error(text: &str) -> String {
     let mut result = text.to_string();
-    for prefix in &["ghp_", "sk-", "Bearer ", "token=", "key=", "password=", "secret="] {
+    for prefix in &[
+        "ghp_",
+        "sk-",
+        "Bearer ",
+        "token=",
+        "key=",
+        "password=",
+        "secret=",
+    ] {
         while let Some(start) = result.find(prefix) {
             let rest = &result[start..];
             let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
@@ -94,9 +121,15 @@ impl McpServerConfig {
             TransportType::Stdio
         }
     }
-    pub fn is_stdio(&self) -> bool { self.transport_type() == TransportType::Stdio }
-    pub fn is_http(&self) -> bool { self.transport_type() == TransportType::Http }
-    pub fn is_sse(&self) -> bool { self.transport_type() == TransportType::Sse }
+    pub fn is_stdio(&self) -> bool {
+        self.transport_type() == TransportType::Stdio
+    }
+    pub fn is_http(&self) -> bool {
+        self.transport_type() == TransportType::Http
+    }
+    pub fn is_sse(&self) -> bool {
+        self.transport_type() == TransportType::Sse
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -192,17 +225,21 @@ impl McpClient {
                 for (k, v) in &build_safe_env(Some(&config.env)) {
                     cmd.env(k, v);
                 }
-                cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+                cmd.stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
 
-                let mut child = cmd.spawn().map_err(|e| {
-                    ToolError::Other(format!("启动 MCP 服务器 '{name}' 失败: {e}"))
-                })?;
-                let stdin = child.stdin.take().ok_or_else(|| {
-                    ToolError::Other("无法获取 MCP stdin".into())
-                })?;
-                let stdout = child.stdout.take().ok_or_else(|| {
-                    ToolError::Other("无法获取 MCP stdout".into())
-                })?;
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|e| ToolError::Other(format!("启动 MCP 服务器 '{name}' 失败: {e}")))?;
+                let stdin = child
+                    .stdin
+                    .take()
+                    .ok_or_else(|| ToolError::Other("无法获取 MCP stdin".into()))?;
+                let stdout = child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| ToolError::Other("无法获取 MCP stdout".into()))?;
 
                 Self {
                     transport: tt,
@@ -225,9 +262,10 @@ impl McpClient {
                     .map_err(|e| ToolError::Other(format!("创建 HTTP 客户端: {e}")))?;
 
                 // OAuth 客户端（如果配置了）
-                let oauth_client = config.oauth.as_ref().map(|oc| {
-                    OAuthClient::new(&config.url, oc, &crate::hermes_home(), name)
-                });
+                let oauth_client = config
+                    .oauth
+                    .as_ref()
+                    .map(|oc| OAuthClient::new(&config.url, oc, &crate::hermes_home(), name));
 
                 Self {
                     transport: tt,
@@ -261,7 +299,10 @@ impl McpClient {
     /// 获取工具列表（带缓存）。
     pub fn list_tools(&self) -> Result<Vec<McpToolDef>, ToolError> {
         {
-            let cached = self.cached_tools.lock().map_err(|e| ToolError::Other(e.to_string()))?;
+            let cached = self
+                .cached_tools
+                .lock()
+                .map_err(|e| ToolError::Other(e.to_string()))?;
             if let Some(tools) = cached.as_ref() {
                 return Ok(tools.clone());
             }
@@ -272,7 +313,10 @@ impl McpClient {
         )
         .map_err(|e| ToolError::Other(format!("解析 tools/list: {e}")))?;
 
-        let mut cached = self.cached_tools.lock().map_err(|e| ToolError::Other(e.to_string()))?;
+        let mut cached = self
+            .cached_tools
+            .lock()
+            .map_err(|e| ToolError::Other(e.to_string()))?;
         *cached = Some(parsed.tools.clone());
         Ok(parsed.tools)
     }
@@ -305,7 +349,10 @@ impl McpClient {
 
     /// 刷新工具缓存。
     pub fn refresh_tools(&self) -> Result<(), ToolError> {
-        let mut cached = self.cached_tools.lock().map_err(|e| ToolError::Other(e.to_string()))?;
+        let mut cached = self
+            .cached_tools
+            .lock()
+            .map_err(|e| ToolError::Other(e.to_string()))?;
         *cached = None;
         drop(cached);
         self.list_tools()?;
@@ -353,7 +400,9 @@ impl McpClient {
                     ToolError::Other(sanitize_error(&format!("HTTP 请求失败: {e}")))
                 })?;
                 let status = resp.status();
-                let text = resp.text().map_err(|e| ToolError::Other(format!("读取: {e}")))?;
+                let text = resp
+                    .text()
+                    .map_err(|e| ToolError::Other(format!("读取: {e}")))?;
                 if !status.is_success() {
                     return Err(ToolError::Other(sanitize_error(&format!(
                         "HTTP {status}: {text}"
@@ -419,7 +468,9 @@ impl McpClient {
         stdin
             .write_all(format!("{line}\n").as_bytes())
             .map_err(|e| ToolError::Other(format!("写入 stdin: {e}")))?;
-        stdin.flush().map_err(|e| ToolError::Other(format!("flush: {e}")))?;
+        stdin
+            .flush()
+            .map_err(|e| ToolError::Other(format!("flush: {e}")))?;
         Ok(())
     }
 
@@ -439,12 +490,14 @@ impl McpClient {
     fn check_resp(&self, resp: RpcResp, expected_id: u64) -> Result<Option<Value>, ToolError> {
         if resp.id != expected_id {
             return Err(ToolError::Other(format!(
-                "JSON-RPC id 不匹配: 期望 {expected_id}, 收到 {}", resp.id
+                "JSON-RPC id 不匹配: 期望 {expected_id}, 收到 {}",
+                resp.id
             )));
         }
         if let Some(err) = resp.error {
             return Err(ToolError::Other(sanitize_error(&format!(
-                "JSON-RPC 错误: {}", serde_json::to_string(&err).unwrap_or_default()
+                "JSON-RPC 错误: {}",
+                serde_json::to_string(&err).unwrap_or_default()
             ))));
         }
         Ok(resp.result)
@@ -499,9 +552,7 @@ impl Tool for McpTool {
 
 // ===== 公开 API =====
 
-pub fn discover_mcp_tools(
-    mcp_servers: &HashMap<String, McpServerConfig>,
-) -> Vec<Box<dyn Tool>> {
+pub fn discover_mcp_tools(mcp_servers: &HashMap<String, McpServerConfig>) -> Vec<Box<dyn Tool>> {
     let mut tools = Vec::new();
     for (name, config) in mcp_servers {
         match McpClient::connect(name, config) {
@@ -511,16 +562,17 @@ pub fn discover_mcp_tools(
                     Ok(defs) => {
                         eprintln!("MCP: 服务器 '{name}' 发现 {} 个工具", defs.len());
                         for def in &defs {
-                            tools.push(
-                                Box::new(McpTool::new(name, def, Arc::clone(&client)))
-                                    as Box<dyn Tool>,
-                            );
+                            tools.push(Box::new(McpTool::new(name, def, Arc::clone(&client)))
+                                as Box<dyn Tool>);
                         }
                     }
                     Err(e) => eprintln!("MCP: 服务器 '{name}' tools/list 失败: {e}"),
                 }
             }
-            Err(e) => eprintln!("MCP: 服务器 '{name}' 连接失败: {}", sanitize_error(&e.to_string())),
+            Err(e) => eprintln!(
+                "MCP: 服务器 '{name}' 连接失败: {}",
+                sanitize_error(&e.to_string())
+            ),
         }
     }
     tools
@@ -541,7 +593,8 @@ mod tests {
 
     #[test]
     fn parse_http_config() {
-        let yaml = "url: 'https://mcp.example.com/api'\nheaders:\n  Authorization: 'Bearer sk-test'\n";
+        let yaml =
+            "url: 'https://mcp.example.com/api'\nheaders:\n  Authorization: 'Bearer sk-test'\n";
         let c: McpServerConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(c.transport_type(), TransportType::Http);
         assert!(c.url.contains("mcp.example.com"));

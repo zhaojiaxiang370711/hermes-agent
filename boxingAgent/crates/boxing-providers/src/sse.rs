@@ -22,7 +22,10 @@ pub(super) struct SseLineStream<S> {
 
 impl<S> SseLineStream<S> {
     pub(super) fn new(inner: S) -> Self {
-        Self { inner, buf: String::new() }
+        Self {
+            inner,
+            buf: String::new(),
+        }
     }
 }
 

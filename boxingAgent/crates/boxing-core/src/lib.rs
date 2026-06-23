@@ -16,12 +16,12 @@ use boxing_tools::Tool;
 use futures::StreamExt;
 use std::sync::{Arc, Mutex};
 
+pub mod async_delegation;
 pub mod delegate;
 pub mod memory_injector;
-pub mod async_delegation;
+pub use async_delegation::{AsyncDelegate, AsyncDelegationRegistry, CompletedDelegation};
 pub use delegate::Delegate;
 pub use memory_injector::MemoryInjector;
-pub use async_delegation::{AsyncDelegate, AsyncDelegationRegistry, CompletedDelegation};
 
 pub struct Agent {
     provider: Arc<dyn Provider>,
@@ -64,7 +64,16 @@ impl Agent {
         max_turns: usize,
         max_tokens: u32,
     ) -> Self {
-        Self { provider, model, system, tools, max_turns, max_tokens, store: None, memory_injector: None }
+        Self {
+            provider,
+            model,
+            system,
+            tools,
+            max_turns,
+            max_tokens,
+            store: None,
+            memory_injector: None,
+        }
     }
 
     /// 启用状态持久化（builder 模式）。
@@ -81,7 +90,9 @@ impl Agent {
 
     /// 为测试用：取出 store（便于断言持久化结果）。
     pub fn take_store(&mut self) -> Option<SessionStore> {
-        self.store.take().map(|m| m.into_inner().expect("Mutex poisoned"))
+        self.store
+            .take()
+            .map(|m| m.into_inner().expect("Mutex poisoned"))
     }
 
     /// 工具调用循环。返回最终回答（中间轮文本已通过 `on_delta` 流式输出）。
@@ -95,10 +106,12 @@ impl Agent {
         let session_id = uuid::Uuid::new_v4().to_string();
 
         if let Some(store) = &self.store {
-            store
-                .lock()
-                .unwrap()
-                .create_session(&session_id, "cli", Some(&self.model), Some(&self.system))?;
+            store.lock().unwrap().create_session(
+                &session_id,
+                "cli",
+                Some(&self.model),
+                Some(&self.system),
+            )?;
         }
 
         let mut messages: Vec<ChatMessage> = Vec::new();
@@ -145,10 +158,15 @@ impl Agent {
             }
 
             for tc in turn.tool_calls {
-                on_event(LoopEvent::ToolCall { name: tc.name.clone() });
+                on_event(LoopEvent::ToolCall {
+                    name: tc.name.clone(),
+                });
                 let result = self.dispatch(&tc).await;
                 let ok = !result.starts_with("error:");
-                on_event(LoopEvent::ToolResult { name: tc.name.clone(), ok });
+                on_event(LoopEvent::ToolResult {
+                    name: tc.name.clone(),
+                    ok,
+                });
 
                 let tool_msg = ChatMessage {
                     role: "tool".into(),
@@ -306,10 +324,19 @@ mod tests {
             ],
             call: Mutex::new(0),
         };
-        let mut agent =
-            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 5, 4096);
+        let mut agent = Agent::new(
+            Arc::new(provider),
+            "m".into(),
+            "".into(),
+            vec![Box::new(Bash)],
+            5,
+            4096,
+        );
         let mut events = Vec::new();
-        let answer = agent.run("do it", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
+        let answer = agent
+            .run("do it", &mut |_| {}, &mut |e| events.push(e))
+            .await
+            .unwrap();
         assert_eq!(answer, "done");
         assert!(events
             .iter()
@@ -330,10 +357,19 @@ mod tests {
             })]],
             call: Mutex::new(0),
         };
-        let mut agent =
-            Agent::new(Arc::new(provider), "m".into(), "".into(), vec![Box::new(Bash)], 2, 4096);
+        let mut agent = Agent::new(
+            Arc::new(provider),
+            "m".into(),
+            "".into(),
+            vec![Box::new(Bash)],
+            2,
+            4096,
+        );
         let mut events = Vec::new();
-        let answer = agent.run("go", &mut |_| {}, &mut |e| events.push(e)).await.unwrap();
+        let answer = agent
+            .run("go", &mut |_| {}, &mut |e| events.push(e))
+            .await
+            .unwrap();
         assert_eq!(answer, "");
         assert!(events.iter().any(|e| matches!(e, LoopEvent::MaxTurns)));
     }

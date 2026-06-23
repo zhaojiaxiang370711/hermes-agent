@@ -41,7 +41,11 @@ impl OpenAiCompat {
         base_url: impl Into<String>,
         api_key: impl Into<String>,
     ) -> Self {
-        Self { client, base_url: base_url.into(), api_key: api_key.into() }
+        Self {
+            client,
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+        }
     }
 
     fn url(&self, suffix: &str) -> String {
@@ -90,7 +94,11 @@ impl Provider for OpenAiCompat {
                 output_tokens: u.completion_tokens,
             })
             .unwrap_or_default();
-        Ok(ChatResponse { content, usage, tool_calls })
+        Ok(ChatResponse {
+            content,
+            usage,
+            tool_calls,
+        })
     }
 
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
@@ -125,7 +133,10 @@ impl Provider for OpenAiCompat {
 fn openai_tools(req: &ChatRequest) -> Vec<OpenAiTool<'_>> {
     req.tools
         .iter()
-        .map(|t| OpenAiTool { kind: "function", function: t })
+        .map(|t| OpenAiTool {
+            kind: "function",
+            function: t,
+        })
         .collect()
 }
 
@@ -331,7 +342,11 @@ impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for OpenAiD
 /// 把累积的 tool_call 移入 pending 待发。
 fn flush_accum<S: Unpin>(me: &mut OpenAiDeltaStream<S>) {
     for a in me.accum.drain(..) {
-        me.pending.push_back(ToolCall { id: a.id, name: a.name, arguments: a.arguments });
+        me.pending.push_back(ToolCall {
+            id: a.id,
+            name: a.name,
+            arguments: a.arguments,
+        });
     }
 }
 
@@ -471,7 +486,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
             .and(body_string_contains("\"stream\":true"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"),
+            )
             .mount(&server)
             .await;
 
@@ -498,7 +515,9 @@ mod tests {
         .to_string();
         Mock::given(method("POST"))
             .and(path("/chat/completions"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"),
+            )
             .mount(&server)
             .await;
 

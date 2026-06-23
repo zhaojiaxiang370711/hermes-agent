@@ -43,7 +43,11 @@ impl Anthropic {
         base_url: impl Into<String>,
         api_key: impl Into<String>,
     ) -> Self {
-        Self { client, base_url: base_url.into(), api_key: api_key.into() }
+        Self {
+            client,
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+        }
     }
 
     fn url(&self, suffix: &str) -> String {
@@ -93,14 +97,25 @@ impl Provider for Anthropic {
                     .as_ref()
                     .map(|v| serde_json::to_string(v).unwrap_or_default())
                     .unwrap_or_default();
-                Some(ToolCall { id, name, arguments })
+                Some(ToolCall {
+                    id,
+                    name,
+                    arguments,
+                })
             })
             .collect();
         let usage = parsed
             .usage
-            .map(|u| Usage { input_tokens: u.input_tokens, output_tokens: u.output_tokens })
+            .map(|u| Usage {
+                input_tokens: u.input_tokens,
+                output_tokens: u.output_tokens,
+            })
             .unwrap_or_default();
-        Ok(ChatResponse { content, usage, tool_calls })
+        Ok(ChatResponse {
+            content,
+            usage,
+            tool_calls,
+        })
     }
 
     async fn stream(&self, req: &ChatRequest) -> Result<ChatStream, ProviderError> {
@@ -237,7 +252,10 @@ fn to_anthropic_messages(msgs: &[ChatMessage]) -> (Option<String>, Vec<Anthropic
 fn flush_results(out: &mut Vec<AnthropicMessage>, pending: &mut Vec<serde_json::Value>) {
     if !pending.is_empty() {
         let blocks = std::mem::take(pending);
-        out.push(AnthropicMessage { role: "user".into(), content: AnthropicContent::Blocks(blocks) });
+        out.push(AnthropicMessage {
+            role: "user".into(),
+            content: AnthropicContent::Blocks(blocks),
+        });
     }
 }
 
@@ -362,7 +380,8 @@ impl<S: Stream<Item = Result<Bytes, reqwest::Error>> + Unpin> Stream for Anthrop
                             continue;
                         }
                         Some("content_block_start") => {
-                            if let (Some(idx), Some(cb)) = (event.index, event.content_block.as_ref())
+                            if let (Some(idx), Some(cb)) =
+                                (event.index, event.content_block.as_ref())
                             {
                                 if cb.kind.as_deref() == Some("tool_use") {
                                     me.blocks.insert(
@@ -573,7 +592,9 @@ mod tests {
             .and(path("/v1/messages"))
             .and(header("x-api-key", "k"))
             .and(body_string_contains("\"stream\":true"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"),
+            )
             .mount(&server)
             .await;
 
@@ -607,7 +628,9 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/messages"))
             .and(header("x-api-key", "k"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(sse.into_bytes(), "text/event-stream"),
+            )
             .mount(&server)
             .await;
 

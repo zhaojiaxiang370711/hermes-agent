@@ -48,7 +48,11 @@ impl ConfigDoc {
 
     /// List the string keys under a path (top level if `dotted` is empty).
     pub fn list(&self, dotted: &str) -> Result<Vec<String>, GetError> {
-        let node = if dotted.is_empty() { &self.root } else { self.lookup(dotted)? };
+        let node = if dotted.is_empty() {
+            &self.root
+        } else {
+            self.lookup(dotted)?
+        };
         match node {
             serde_yaml::Value::Mapping(m) => Ok(m
                 .keys()
@@ -249,7 +253,16 @@ mod tests {
             .filter(|l| !l.starts_with(' ') && l.contains(':'))
             .map(|l| l.split(':').next().unwrap())
             .collect();
-        assert_eq!(tops, vec!["model", "providers", "fallback_providers", "toolsets", "agent"]);
+        assert_eq!(
+            tops,
+            vec![
+                "model",
+                "providers",
+                "fallback_providers",
+                "toolsets",
+                "agent"
+            ]
+        );
     }
 
     #[test]
@@ -298,8 +311,20 @@ mod tests {
     #[test]
     fn list_top_level_and_nested() {
         let doc = ConfigDoc::from_str(FIXTURE).unwrap();
-        assert_eq!(doc.list("").unwrap(), vec!["model", "providers", "fallback_providers", "toolsets", "agent"]);
-        assert_eq!(doc.list("agent").unwrap(), vec!["max_turns", "gateway_timeout"]);
+        assert_eq!(
+            doc.list("").unwrap(),
+            vec![
+                "model",
+                "providers",
+                "fallback_providers",
+                "toolsets",
+                "agent"
+            ]
+        );
+        assert_eq!(
+            doc.list("agent").unwrap(),
+            vec!["max_turns", "gateway_timeout"]
+        );
     }
 
     #[test]
@@ -337,6 +362,15 @@ mod tests {
             .filter(|l| !l.starts_with(' ') && l.contains(':'))
             .map(|l| l.split(':').next().unwrap())
             .collect();
-        assert_eq!(tops, vec!["model", "providers", "fallback_providers", "toolsets", "agent"]);
+        assert_eq!(
+            tops,
+            vec![
+                "model",
+                "providers",
+                "fallback_providers",
+                "toolsets",
+                "agent"
+            ]
+        );
     }
 }

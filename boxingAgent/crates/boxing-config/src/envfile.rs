@@ -14,7 +14,9 @@ pub fn env_value(path: &Path, key: &str) -> Option<String> {
             continue;
         }
         let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
-        let Some((k, v)) = line.split_once('=') else { continue };
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
         if k.trim() != key {
             continue;
         }
@@ -57,7 +59,11 @@ mod tests {
     #[test]
     fn handles_export_prefix_and_quotes() {
         let dir = std::env::temp_dir().join("hermes-env-test-export");
-        let p = write_env(&dir, ".env", "export FOO=\"bar baz\"\n  QUOTED='single'\nBLANK=\n");
+        let p = write_env(
+            &dir,
+            ".env",
+            "export FOO=\"bar baz\"\n  QUOTED='single'\nBLANK=\n",
+        );
         assert_eq!(env_value(&p, "FOO").as_deref(), Some("bar baz"));
         assert_eq!(env_value(&p, "QUOTED").as_deref(), Some("single"));
         assert_eq!(env_value(&p, "BLANK").as_deref(), Some(""));

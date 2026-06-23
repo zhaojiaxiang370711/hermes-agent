@@ -61,7 +61,12 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
-        Self { role: role.into(), content: content.into(), tool_calls: None, tool_call_id: None }
+        Self {
+            role: role.into(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 }
 
@@ -81,7 +86,13 @@ pub struct ChatRequest {
 
 impl ChatRequest {
     pub fn new(model: impl Into<String>, messages: Vec<ChatMessage>) -> Self {
-        Self { model: model.into(), messages, max_tokens: None, stream: false, tools: vec![] }
+        Self {
+            model: model.into(),
+            messages,
+            max_tokens: None,
+            stream: false,
+            tools: vec![],
+        }
     }
 }
 
@@ -106,7 +117,10 @@ pub struct Usage {
 
 impl Usage {
     pub fn new(input: u64, output: u64) -> Self {
-        Self { input_tokens: Some(input), output_tokens: Some(output) }
+        Self {
+            input_tokens: Some(input),
+            output_tokens: Some(output),
+        }
     }
 }
 
@@ -152,7 +166,10 @@ pub(crate) async fn ensure_success(
         Ok(resp)
     } else {
         let body = resp.text().await.unwrap_or_default();
-        Err(ProviderError::Status { status: status.as_u16(), body })
+        Err(ProviderError::Status {
+            status: status.as_u16(),
+            body,
+        })
     }
 }
 
@@ -198,7 +215,11 @@ mod tests {
         #[async_trait::async_trait]
         impl Provider for Dummy {
             async fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
-                Ok(ChatResponse { content: "ok".into(), usage: Usage::new(1, 2), tool_calls: vec![] })
+                Ok(ChatResponse {
+                    content: "ok".into(),
+                    usage: Usage::new(1, 2),
+                    tool_calls: vec![],
+                })
             }
             async fn stream(&self, _req: &ChatRequest) -> Result<ChatStream, ProviderError> {
                 let s = futures::stream::iter(vec![
@@ -231,11 +252,16 @@ mod tests {
     // so the resolver (S6) can produce either.
     #[test]
     fn catalog_lists_both_kinds_and_resolver_implements_both() {
-        const CATALOG: &str =
-            include_str!("../../../specs/providers-phase1b.yaml");
-        assert!(CATALOG.contains("openai_compatible"), "catalog must list openai_compatible");
+        const CATALOG: &str = include_str!("../../../specs/providers-phase1b.yaml");
+        assert!(
+            CATALOG.contains("openai_compatible"),
+            "catalog must list openai_compatible"
+        );
         assert!(CATALOG.contains("anthropic"), "catalog must list anthropic");
-        assert!(CATALOG.contains("streaming"), "catalog must describe streaming");
+        assert!(
+            CATALOG.contains("streaming"),
+            "catalog must describe streaming"
+        );
 
         fn is_provider(_: Box<dyn Provider>) {}
         is_provider(Box::new(crate::OpenAiCompat::new("http://localhost", "k")));

@@ -40,12 +40,21 @@ impl Tool for Ls {
 }
 
 /// 递归收集条目；`rel` 为相对根的路径前缀（根层时为空）。
-fn walk(root: &Path, rel: PathBuf, recursive: bool, out: &mut Vec<String>) -> Result<(), ToolError> {
+fn walk(
+    root: &Path,
+    rel: PathBuf,
+    recursive: bool,
+    out: &mut Vec<String>,
+) -> Result<(), ToolError> {
     for entry in std::fs::read_dir(root)?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let path_str = rel.join(&name).display().to_string();
-        out.push(if is_dir { format!("{path_str}/") } else { path_str });
+        out.push(if is_dir {
+            format!("{path_str}/")
+        } else {
+            path_str
+        });
         if recursive && is_dir {
             walk(&entry.path(), rel.join(&name), recursive, out)?;
         }
@@ -84,7 +93,10 @@ mod tests {
     async fn recursive_walks_subdir() {
         let dir = fixture();
         std::fs::write(std::path::Path::new(&dir).join("sub/c.txt"), "").unwrap();
-        let out = Ls.exec(json!({"path": dir, "recursive": true})).await.unwrap();
+        let out = Ls
+            .exec(json!({"path": dir, "recursive": true}))
+            .await
+            .unwrap();
         assert!(out.contains("sub/c.txt"));
     }
 }

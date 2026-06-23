@@ -111,7 +111,10 @@ mod tests {
         ));
         let dir = std::env::temp_dir().join(format!("boxing-read-dir-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(Read.exec(json!({"path": dir.to_string_lossy()})).await.is_err());
+        assert!(Read
+            .exec(json!({"path": dir.to_string_lossy()}))
+            .await
+            .is_err());
 
         let p = tmp("bin", "a\x00b\n");
         assert!(Read.exec(json!({"path": p})).await.is_err());

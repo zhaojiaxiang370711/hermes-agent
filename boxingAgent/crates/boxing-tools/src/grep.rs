@@ -130,7 +130,9 @@ mod tests {
     async fn content_mode_respects_include() {
         let dir = fixture();
         let out = Grep
-            .exec(json!({"pattern": "fn ", "path": dir, "include": "*.rs", "output_mode": "content"}))
+            .exec(
+                json!({"pattern": "fn ", "path": dir, "include": "*.rs", "output_mode": "content"}),
+            )
             .await
             .unwrap();
         assert!(out.contains("a.rs:1:fn main"));
@@ -156,6 +158,9 @@ mod tests {
     #[tokio::test]
     async fn bad_regex_errors() {
         let dir = fixture();
-        assert!(Grep.exec(json!({"pattern": "*invalid", "path": dir})).await.is_err());
+        assert!(Grep
+            .exec(json!({"pattern": "*invalid", "path": dir}))
+            .await
+            .is_err());
     }
 }

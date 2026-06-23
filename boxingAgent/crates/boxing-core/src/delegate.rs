@@ -52,11 +52,22 @@ impl Delegate {
         max_tokens: u32,
         depth: usize,
     ) -> Self {
-        Self { provider, model, system, max_turns, max_tokens, depth, async_registry: None }
+        Self {
+            provider,
+            model,
+            system,
+            max_turns,
+            max_tokens,
+            depth,
+            async_registry: None,
+        }
     }
 
     /// 设置异步委托注册表（启用 background=true 模式）。
-    pub fn with_async_registry(mut self, registry: Arc<crate::async_delegation::AsyncDelegationRegistry>) -> Self {
+    pub fn with_async_registry(
+        mut self,
+        registry: Arc<crate::async_delegation::AsyncDelegationRegistry>,
+    ) -> Self {
         self.async_registry = Some(registry);
         self
     }
@@ -153,10 +164,7 @@ impl Tool for Delegate {
             .get("context")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let role = args
-            .get("role")
-            .and_then(|v| v.as_str())
-            .unwrap_or("leaf");
+        let role = args.get("role").and_then(|v| v.as_str()).unwrap_or("leaf");
         let background = args
             .get("background")
             .and_then(|v| v.as_bool())
@@ -176,11 +184,10 @@ impl Tool for Delegate {
         }
 
         // 子代理工具集：过滤掉被阻止的工具
-        let child_tools: Vec<Box<dyn boxing_tools::Tool>> =
-            boxing_tools::default_tools()
-                .into_iter()
-                .filter(|t| !BLOCKED_TOOLS.contains(&t.name()))
-                .collect();
+        let child_tools: Vec<Box<dyn boxing_tools::Tool>> = boxing_tools::default_tools()
+            .into_iter()
+            .filter(|t| !BLOCKED_TOOLS.contains(&t.name()))
+            .collect();
 
         // 组装子代理的用户消息（context 追加到 goal 前）
         let user_message = match context {
@@ -245,7 +252,9 @@ mod tests {
         }
         async fn stream(&self, _: &ChatRequest) -> Result<ChatStream, ProviderError> {
             let text = self.0.clone();
-            Ok(Box::pin(futures::stream::iter(vec![Ok(StreamEvent::Text(text))])))
+            Ok(Box::pin(futures::stream::iter(vec![Ok(
+                StreamEvent::Text(text),
+            )])))
         }
     }
 
@@ -253,10 +262,7 @@ mod tests {
     async fn delegate_runs_child_and_returns_result() {
         let provider: Arc<dyn Provider> = Arc::new(StaticProvider("子代理回答".into()));
         let delegate = Delegate::new(provider, "m".into(), "".into(), 5, 4096, 0);
-        let out = delegate
-            .exec(json!({"goal": "执行任务"}))
-            .await
-            .unwrap();
+        let out = delegate.exec(json!({"goal": "执行任务"})).await.unwrap();
         assert!(out.contains("completed"));
         assert!(out.contains("子代理回答"));
         assert!(out.contains("duration_seconds"));
@@ -276,14 +282,16 @@ mod tests {
     #[tokio::test]
     async fn child_blocked_from_memory_and_delegate() {
         // 子代理工具集不包含 delegate_task 和 memory
-        let child_tools: Vec<Box<dyn boxing_tools::Tool>> =
-            boxing_tools::default_tools()
-                .into_iter()
-                .filter(|t| !BLOCKED_TOOLS.contains(&t.name()))
-                .collect();
+        let child_tools: Vec<Box<dyn boxing_tools::Tool>> = boxing_tools::default_tools()
+            .into_iter()
+            .filter(|t| !BLOCKED_TOOLS.contains(&t.name()))
+            .collect();
         let names: Vec<&str> = child_tools.iter().map(|t| t.name()).collect();
         assert!(!names.contains(&"memory"), "子代理不应包含 memory");
-        assert!(!names.contains(&"delegate_task"), "子代理不应包含 delegate_task");
+        assert!(
+            !names.contains(&"delegate_task"),
+            "子代理不应包含 delegate_task"
+        );
         assert!(names.contains(&"read"), "子代理应包含 read");
     }
 }

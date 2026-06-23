@@ -4,8 +4,8 @@
 //! 格式化为系统提示的"冻结快照"，在每次 run() 时自动注入。
 //! 采用 Hermes 原版的快照模式：会话开始时读取一次，之后不再变化。
 
-use std::path::Path;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// 条目分隔符（与 Hermes 原版一致）。
 const ENTRY_DELIMITER: &str = "§";
@@ -115,7 +115,11 @@ mod tests {
     #[test]
     fn loads_memory_and_user_files() {
         let dir = temp_hermes_home();
-        fs::write(dir.join("MEMORY.md"), "§记住了中文注释规范\n§项目使用Rust重写").unwrap();
+        fs::write(
+            dir.join("MEMORY.md"),
+            "§记住了中文注释规范\n§项目使用Rust重写",
+        )
+        .unwrap();
         fs::write(dir.join("USER.md"), "§喜欢简洁的代码风格").unwrap();
 
         let injector = MemoryInjector::load(&dir);

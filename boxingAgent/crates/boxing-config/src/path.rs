@@ -12,8 +12,7 @@ pub fn resolve_hermes_home(
     if let Some(p) = env_home {
         return Ok(p.to_path_buf());
     }
-    let h = home
-        .ok_or_else(|| anyhow::anyhow!("HOME is not set; set HERMES_HOME or HOME"))?;
+    let h = home.ok_or_else(|| anyhow::anyhow!("HOME is not set; set HERMES_HOME or HOME"))?;
     Ok(h.join(".hermes"))
 }
 
@@ -46,8 +45,8 @@ mod tests {
 
     #[test]
     fn env_home_wins() {
-        let p = resolve_hermes_home(Some(Path::new("/tmp/xx")), Some(Path::new("/home/u")))
-            .unwrap();
+        let p =
+            resolve_hermes_home(Some(Path::new("/tmp/xx")), Some(Path::new("/home/u"))).unwrap();
         assert_eq!(p, PathBuf::from("/tmp/xx"));
     }
 
@@ -66,7 +65,10 @@ mod tests {
     #[test]
     fn config_env_and_state_paths() {
         let home = resolve_hermes_home(Some(Path::new("/tmp/xx")), None).unwrap();
-        assert_eq!(home.join("config.yaml"), PathBuf::from("/tmp/xx/config.yaml"));
+        assert_eq!(
+            home.join("config.yaml"),
+            PathBuf::from("/tmp/xx/config.yaml")
+        );
         assert_eq!(home.join(".env"), PathBuf::from("/tmp/xx/.env"));
         assert_eq!(home.join("state.db"), PathBuf::from("/tmp/xx/state.db"));
     }

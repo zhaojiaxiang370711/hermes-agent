@@ -65,7 +65,10 @@ mod tests {
         assert!(out.contains("已写入 5 字节"));
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "hello");
         // 覆盖
-        Write.exec(json!({"path": p.to_string_lossy(), "content": "hi"})).await.unwrap();
+        Write
+            .exec(json!({"path": p.to_string_lossy(), "content": "hi"}))
+            .await
+            .unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "hi");
     }
 

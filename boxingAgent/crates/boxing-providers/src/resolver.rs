@@ -10,9 +10,7 @@ use std::path::Path;
 
 use boxing_config::ConfigDoc;
 
-use crate::{
-    Anthropic, OpenAiCompat, Provider, ProviderError,
-};
+use crate::{Anthropic, OpenAiCompat, Provider, ProviderError};
 
 /// Build the configured provider, resolving its API key from `env_path`.
 ///
@@ -84,7 +82,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let doc = ConfigDoc::from_str(&config_yaml("qxtech", &server.uri(), "QXTECH_API_KEY")).unwrap();
+        let doc =
+            ConfigDoc::from_str(&config_yaml("qxtech", &server.uri(), "QXTECH_API_KEY")).unwrap();
         let env = temp_env("hermes-resolver-openai", "QXTECH_API_KEY=secret");
 
         let p = resolve(&doc, &env).unwrap();
@@ -105,7 +104,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let doc = ConfigDoc::from_str(&config_yaml("anthropic", &server.uri(), "ANTHROPIC_API_KEY")).unwrap();
+        let doc = ConfigDoc::from_str(&config_yaml(
+            "anthropic",
+            &server.uri(),
+            "ANTHROPIC_API_KEY",
+        ))
+        .unwrap();
         let env = temp_env("hermes-resolver-anthropic", "ANTHROPIC_API_KEY=antkey");
 
         let p = resolve(&doc, &env).unwrap();
@@ -127,7 +131,8 @@ mod tests {
 
     #[test]
     fn resolve_errors_when_key_missing_in_env() {
-        let doc = ConfigDoc::from_str(&config_yaml("qxtech", "http://localhost:1", "NOPE_KEY")).unwrap();
+        let doc =
+            ConfigDoc::from_str(&config_yaml("qxtech", "http://localhost:1", "NOPE_KEY")).unwrap();
         let env = temp_env("hermes-resolver-missing", "OTHER=1");
         match resolve(&doc, &env) {
             Err(ProviderError::Config(_)) => {}

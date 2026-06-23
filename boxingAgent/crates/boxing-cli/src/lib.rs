@@ -1,14 +1,19 @@
-//! Command-line interface for boxingAgent (Phase 1a: scaffold + config).
+//! Command-line interface for boxingAgent.
 //!
-//! Command names mirror hermes_cli/main.py: `_AGENT_COMMANDS = {None, "chat", ...}`
-//! (no subcommand ⇒ chat) and `config` is a builtin subcommand.
+//! 命令：chat / config / mcp / acp / model
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+pub mod acp;
+
 #[derive(Parser, Debug)]
-#[command(name = "boxing-agent", version, about = "Faithful Rust port of the Hermes agent core")]
+#[command(
+    name = "boxing-agent",
+    version,
+    about = "Faithful Rust port of the Hermes agent core"
+)]
 pub struct Cli {
     /// Override the model id (e.g. "example-model").
     #[arg(long, global = true)]
@@ -51,6 +56,8 @@ pub enum Command {
         #[command(subcommand)]
         action: McpAction,
     },
+    /// Start ACP (Agent Client Protocol) stdio server for IDE integration.
+    Acp,
     /// Model selection (Phase 1b).
     Model,
 }
@@ -132,7 +139,9 @@ fn agent_tools(
     // 发现并注册 MCP 工具
     if let Ok(mcp_yaml) = config.get("mcp_servers") {
         if !mcp_yaml.is_empty() {
-            match serde_yaml::from_str::<HashMap<String, boxing_tools::mcp::McpServerConfig>>(&mcp_yaml) {
+            match serde_yaml::from_str::<HashMap<String, boxing_tools::mcp::McpServerConfig>>(
+                &mcp_yaml,
+            ) {
                 Ok(servers) if !servers.is_empty() => {
                     eprintln!("MCP: 发现 {} 个配置的服务器", servers.len());
                     let mcp_tools = boxing_tools::mcp::discover_mcp_tools(&servers);
@@ -159,7 +168,8 @@ fn agent_tools(
             max_turns,
             max_tokens,
             0, // depth
-        ).with_async_registry(Arc::clone(&async_registry))
+        )
+        .with_async_registry(Arc::clone(&async_registry)),
     ));
 
     // 异步委托（background=true 时使用）
@@ -194,8 +204,7 @@ async fn run_chat(
     let config = boxing_config::load(&config_path)?;
 
     let provider = Arc::from(
-        boxing_providers::resolve(&config, &env_path)
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
+        boxing_providers::resolve(&config, &env_path).map_err(|e| anyhow::anyhow!("{e}"))?,
     );
 
     let model = match model {
@@ -206,7 +215,14 @@ async fn run_chat(
     };
     let system = system.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
 
-    let tools = agent_tools(Arc::clone(&provider), &model, &system, max_turns, max_tokens, &config);
+    let tools = agent_tools(
+        Arc::clone(&provider),
+        &model,
+        &system,
+        max_turns,
+        max_tokens,
+        &config,
+    );
     let mut agent = boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
 
     // 启用记忆自动注入
@@ -246,20 +262,26 @@ async fn run_chat(
 
 /// Entry point dispatched from `main`.
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
-    let Cli { model, system, max_tokens, max_turns, command, .. } = cli;
+    let Cli {
+        model,
+        system,
+        max_tokens,
+        max_turns,
+        command,
+        ..
+    } = cli;
     match command {
         None => run_chat(model, system, Vec::new(), max_tokens, max_turns).await,
-        Some(Command::Chat { prompt }) => run_chat(model, system, prompt, max_tokens, max_turns).await,
+        Some(Command::Chat { prompt }) => {
+            run_chat(model, system, prompt, max_tokens, max_turns).await
+        }
         Some(Command::Model) => {
             eprintln!("boxing-agent: model selection is implemented in a later phase.");
             Ok(())
         }
-        Some(Command::Config { action }) => {
-            run_config_at(&boxing_config::config_path()?, action)
-        }
-        Some(Command::Mcp { action }) => {
-            run_mcp(action)
-        }
+        Some(Command::Config { action }) => run_config_at(&boxing_config::config_path()?, action),
+        Some(Command::Mcp { action }) => run_mcp(action),
+        Some(Command::Acp) => acp::run_acp_server().await,
     }
 }
 
@@ -273,7 +295,8 @@ pub fn run_config_at(path: &Path, action: ConfigAction) -> anyhow::Result<()> {
         }
         ConfigAction::Set { key, value } => {
             let mut doc = boxing_config::load_or_default(path)?;
-            doc.set(&key, &value).map_err(|e| anyhow::anyhow!("{}", e))?;
+            doc.set(&key, &value)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
             boxing_config::save(path, &doc)?;
             println!("set {key} = {value}");
         }
@@ -293,9 +316,8 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
     let config_path = boxing_config::config_path()?;
     let mut doc = boxing_config::load_or_default(&config_path)?;
     let hermes_home = boxing_config::hermes_home().unwrap_or_else(|_| {
-        std::path::PathBuf::from(
-            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-        ).join(".hermes")
+        std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+            .join(".hermes")
     });
 
     match action {
@@ -336,7 +358,16 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
             println!();
         }
 
-        McpAction::Add { name, url, command, args, transport, env, headers, timeout } => {
+        McpAction::Add {
+            name,
+            url,
+            command,
+            args,
+            transport,
+            env,
+            headers,
+            timeout,
+        } => {
             if url.is_none() && command.is_none() {
                 anyhow::bail!("必须指定 --url 或 --command");
             }
@@ -353,7 +384,9 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
                 server_map.insert(
                     serde_yaml::Value::String("args".into()),
                     serde_yaml::Value::Sequence(
-                        args.iter().map(|a| serde_yaml::Value::String(a.clone())).collect(),
+                        args.iter()
+                            .map(|a| serde_yaml::Value::String(a.clone()))
+                            .collect(),
                     ),
                 );
             }
@@ -408,7 +441,8 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
             doc.set_yaml(
                 &format!("mcp_servers.{name}"),
                 serde_yaml::Value::Mapping(server_map),
-            ).map_err(|e| anyhow::anyhow!("{e}"))?;
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
             boxing_config::save(&config_path, &doc)?;
             println!("已添加 MCP 服务器 '{name}'");
         }
@@ -451,7 +485,8 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
                 serde_yaml::from_str(&mcp_yaml)
                     .map_err(|e| anyhow::anyhow!("解析 mcp_servers 失败: {e}"))?;
 
-            let config = servers.get(&name)
+            let config = servers
+                .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("服务器 '{name}' 不在配置中"))?;
 
             println!("\n  测试 '{name}'...");
@@ -471,22 +506,24 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
             println!("  传输: {} → {}", transport, endpoint);
 
             match boxing_tools::mcp::McpClient::connect(&name, config) {
-                Ok(client) => {
-                    match client.list_tools() {
-                        Ok(tools) => {
-                            println!("  ✓ 连接成功，发现 {} 个工具", tools.len());
-                            for t in tools.iter().take(5) {
-                                println!("    • {} — {}", t.name, t.description.chars().take(60).collect::<String>());
-                            }
-                            if tools.len() > 5 {
-                                println!("    ... 还有 {} 个", tools.len() - 5);
-                            }
+                Ok(client) => match client.list_tools() {
+                    Ok(tools) => {
+                        println!("  ✓ 连接成功，发现 {} 个工具", tools.len());
+                        for t in tools.iter().take(5) {
+                            println!(
+                                "    • {} — {}",
+                                t.name,
+                                t.description.chars().take(60).collect::<String>()
+                            );
                         }
-                        Err(e) => {
-                            println!("  ✗ 连接成功但 tools/list 失败: {e}");
+                        if tools.len() > 5 {
+                            println!("    ... 还有 {} 个", tools.len() - 5);
                         }
                     }
-                }
+                    Err(e) => {
+                        println!("  ✗ 连接成功但 tools/list 失败: {e}");
+                    }
+                },
                 Err(e) => {
                     println!("  ✗ 连接失败: {e}");
                 }
@@ -500,7 +537,8 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
                 serde_yaml::from_str(&mcp_yaml)
                     .map_err(|e| anyhow::anyhow!("解析 mcp_servers 失败: {e}"))?;
 
-            let config = servers.get(&name)
+            let config = servers
+                .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("服务器 '{name}' 不在配置中"))?;
 
             if config.url.is_empty() {
@@ -526,14 +564,21 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
             match oauth_client.authorize() {
                 Ok(token) => {
                     println!("\n  ✓ OAuth 授权成功！");
-                    println!("    access_token: {}...", &token.access_token[..token.access_token.len().min(12)]);
+                    println!(
+                        "    access_token: {}...",
+                        &token.access_token[..token.access_token.len().min(12)]
+                    );
                     if token.can_refresh() {
                         println!("    refresh_token: 已保存");
                     }
-                    println!("    过期时间: {} 秒后", (token.expires_at - std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs_f64()) as u64);
+                    println!(
+                        "    过期时间: {} 秒后",
+                        (token.expires_at
+                            - std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs_f64()) as u64
+                    );
                 }
                 Err(e) => {
                     anyhow::bail!("OAuth 授权失败: {e}");
@@ -580,7 +625,13 @@ mod tests {
     #[test]
     fn chat_system_and_prompt_flags_parse() {
         let cli = Cli::try_parse_from([
-            "boxing-agent", "chat", "--system", "be brief", "do", "the", "thing",
+            "boxing-agent",
+            "chat",
+            "--system",
+            "be brief",
+            "do",
+            "the",
+            "thing",
         ])
         .unwrap();
         assert_eq!(cli.system.as_deref(), Some("be brief"));

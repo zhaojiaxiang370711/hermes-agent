@@ -25,7 +25,7 @@ use crate::Agent;
 #[derive(Serialize)]
 pub struct AsyncDelegationResult {
     pub delegation_id: String,
-    pub status: String,  // "dispatched"
+    pub status: String, // "dispatched"
     pub message: String,
 }
 
@@ -33,7 +33,7 @@ pub struct AsyncDelegationResult {
 #[derive(Debug, Serialize)]
 pub struct CompletedDelegation {
     pub delegation_id: String,
-    pub status: String,  // "completed" | "failed"
+    pub status: String, // "completed" | "failed"
     pub summary: Option<String>,
     pub error: Option<String>,
     pub duration_seconds: f64,
@@ -167,7 +167,15 @@ impl AsyncDelegate {
         depth: usize,
         registry: Arc<AsyncDelegationRegistry>,
     ) -> Self {
-        Self { provider, model, system, max_turns, max_tokens, _depth: depth, registry }
+        Self {
+            provider,
+            model,
+            system,
+            max_turns,
+            max_tokens,
+            _depth: depth,
+            registry,
+        }
     }
 }
 
@@ -205,7 +213,10 @@ impl Tool for AsyncDelegate {
             .ok_or(ToolError::MissingArg("goal"))?
             .to_string();
 
-        let context = args.get("context").and_then(|v| v.as_str()).map(String::from);
+        let context = args
+            .get("context")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         // 生成 delegation_id
         let uuid_str = uuid::Uuid::new_v4().to_string();
@@ -214,7 +225,11 @@ impl Tool for AsyncDelegate {
         // 获取子代理工具集（排除 delegate_task 和 memory）
         let child_tools: Vec<Box<dyn Tool>> = boxing_tools::default_tools()
             .into_iter()
-            .filter(|t| t.name() != "delegate_task" && t.name() != "delegate_task_async" && t.name() != "memory")
+            .filter(|t| {
+                t.name() != "delegate_task"
+                    && t.name() != "delegate_task_async"
+                    && t.name() != "memory"
+            })
             .collect();
 
         // 分派异步任务
@@ -237,25 +252,32 @@ impl Tool for AsyncDelegate {
             message: "子代理已在后台启动，完成后结果将自动注入对话。".to_string(),
         };
 
-        serde_json::to_string_pretty(&result)
-            .map_err(|e| ToolError::Other(e.to_string()))
+        serde_json::to_string_pretty(&result).map_err(|e| ToolError::Other(e.to_string()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxing_providers::{ChatRequest, ChatResponse, ChatStream, ProviderError, StreamEvent, Usage};
+    use boxing_providers::{
+        ChatRequest, ChatResponse, ChatStream, ProviderError, StreamEvent, Usage,
+    };
 
     struct MockProvider;
     #[async_trait::async_trait]
     impl Provider for MockProvider {
         async fn complete(&self, _req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
-            Ok(ChatResponse { content: "test".into(), usage: Usage::default(), tool_calls: vec![] })
+            Ok(ChatResponse {
+                content: "test".into(),
+                usage: Usage::default(),
+                tool_calls: vec![],
+            })
         }
         async fn stream(&self, _req: &ChatRequest) -> Result<ChatStream, ProviderError> {
             use futures::stream;
-            Ok(Box::pin(stream::iter(vec![Ok(StreamEvent::Text("test".into()))])))
+            Ok(Box::pin(stream::iter(vec![Ok(StreamEvent::Text(
+                "test".into(),
+            ))])))
         }
     }
 
@@ -272,10 +294,7 @@ mod tests {
             Arc::clone(&registry),
         );
 
-        let result = delegate
-            .exec(json!({"goal": "test task"}))
-            .await
-            .unwrap();
+        let result = delegate.exec(json!({"goal": "test task"})).await.unwrap();
         let parsed: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["status"], "dispatched");
         assert!(parsed["delegation_id"].as_str().is_some());
@@ -299,13 +318,10 @@ mod tests {
         let _delegation_id = parsed["delegation_id"].as_str().unwrap();
 
         // 等待完成
-        let completed = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            registry.recv(),
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(5), registry.recv())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(completed.status, "completed");
         assert!(completed.summary.is_some());

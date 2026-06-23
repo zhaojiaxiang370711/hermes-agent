@@ -25,7 +25,9 @@ pub struct Todo {
 
 impl Todo {
     pub fn new() -> Self {
-        Self { store: Mutex::new(Vec::new()) }
+        Self {
+            store: Mutex::new(Vec::new()),
+        }
     }
 }
 
@@ -67,7 +69,10 @@ impl Tool for Todo {
     }
 
     async fn exec(&self, args: Value) -> Result<String, ToolError> {
-        let mut store = self.store.lock().map_err(|e| ToolError::Other(e.to_string()))?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|e| ToolError::Other(e.to_string()))?;
 
         // 读取模式：省略 todos 则返回当前列表
         let todos_val = match args.get("todos") {
@@ -75,8 +80,11 @@ impl Tool for Todo {
             None => return Ok(serde_json::to_string(&*store).unwrap_or_default()),
         };
 
-        let todos: Vec<TodoItem> = serde_json::from_value(todos_val.clone())
-            .map_err(|e| ToolError::InvalidArg { arg: "todos", reason: e.to_string() })?;
+        let todos: Vec<TodoItem> =
+            serde_json::from_value(todos_val.clone()).map_err(|e| ToolError::InvalidArg {
+                arg: "todos",
+                reason: e.to_string(),
+            })?;
         let merge = args.get("merge").and_then(|v| v.as_bool()).unwrap_or(false);
 
         if merge {
@@ -129,14 +137,19 @@ mod tests {
         todo.exec(json!({"todos": [
             {"id": "1", "content": "a", "status": "pending"},
             {"id": "2", "content": "b", "status": "pending"}
-        ]})).await.unwrap();
+        ]}))
+        .await
+        .unwrap();
 
         // merge=true：更新 id=1 状态，追加 id=3
-        let out = todo.exec(json!({
-            "todos": [{"id": "1", "content": "a", "status": "completed"},
-                      {"id": "3", "content": "c", "status": "pending"}],
-            "merge": true
-        })).await.unwrap();
+        let out = todo
+            .exec(json!({
+                "todos": [{"id": "1", "content": "a", "status": "completed"},
+                          {"id": "3", "content": "c", "status": "pending"}],
+                "merge": true
+            }))
+            .await
+            .unwrap();
         assert!(out.contains("completed"));
         assert!(out.contains("c"));
         assert!(out.contains("b")); // id=2 保留

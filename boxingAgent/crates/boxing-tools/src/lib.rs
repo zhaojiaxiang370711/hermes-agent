@@ -148,12 +148,23 @@ mod catalog_tests {
         let tools = default_tools();
         let names: Vec<String> = tools.iter().map(|t| t.name().to_string()).collect();
         let expected = [
-            "read", "write", "edit", "bash", "grep", "glob", "ls",
-            "todo", "memory", "session_search",
+            "read",
+            "write",
+            "edit",
+            "bash",
+            "grep",
+            "glob",
+            "ls",
+            "todo",
+            "memory",
+            "session_search",
         ];
         assert_eq!(names, expected);
         for n in expected {
-            assert!(CATALOG.contains(&format!("- name: {n}")), "catalog 缺少工具 {n}");
+            assert!(
+                CATALOG.contains(&format!("- name: {n}")),
+                "catalog 缺少工具 {n}"
+            );
         }
     }
 }

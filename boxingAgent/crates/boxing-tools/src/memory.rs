@@ -143,7 +143,10 @@ fn write_entries(path: &PathBuf, entries: &[String]) -> Result<(), ToolError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let content: String = entries.iter().map(|e| format!("{DELIMITER}{e}\n")).collect();
+    let content: String = entries
+        .iter()
+        .map(|e| format!("{DELIMITER}{e}\n"))
+        .collect();
     std::fs::write(path, content)?;
     Ok(())
 }
@@ -187,9 +190,11 @@ mod tests {
         tool.exec(json!({"action":"add","target":"memory","content":"旧内容"}))
             .await
             .unwrap();
-        tool.exec(json!({"action":"replace","target":"memory","old_text":"旧内容","content":"新内容"}))
-            .await
-            .unwrap();
+        tool.exec(
+            json!({"action":"replace","target":"memory","old_text":"旧内容","content":"新内容"}),
+        )
+        .await
+        .unwrap();
         let text = std::fs::read_to_string(dir.join("MEMORY.md")).unwrap();
         assert!(text.contains("新内容"));
         assert!(!text.contains("旧内容"));

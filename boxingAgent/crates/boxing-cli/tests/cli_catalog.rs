@@ -15,7 +15,10 @@ fn implemented_commands_match_catalog() {
     let config = cmd.find_subcommand("config").unwrap();
     let cfg_subs: Vec<&str> = config.get_subcommands().map(|s| s.get_name()).collect();
     for required in ["get", "set", "list"] {
-        assert!(cfg_subs.contains(&required), "missing config subcommand: {required}");
+        assert!(
+            cfg_subs.contains(&required),
+            "missing config subcommand: {required}"
+        );
     }
 
     // Unknown commands must remain rejected.
