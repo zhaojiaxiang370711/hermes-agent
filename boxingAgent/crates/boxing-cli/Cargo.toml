@@ -17,6 +17,7 @@ boxing-providers.workspace = true
 boxing-core.workspace = true
 boxing-tools.workspace = true
 boxing-state.workspace = true
+boxing-voice = { workspace = true, features = ["server"] }
 rusqlite.workspace = true
 tokio.workspace = true
 

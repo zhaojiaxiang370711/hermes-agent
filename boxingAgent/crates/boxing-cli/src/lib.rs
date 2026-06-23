@@ -59,6 +59,8 @@ pub enum Command {
     },
     /// Start ACP (Agent Client Protocol) stdio server for IDE integration.
     Acp,
+    /// Start the voice runtime server (wake word + ASR).
+    Voice,
     /// Cron job management.
     Cron {
         #[command(subcommand)]
@@ -336,6 +338,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => run_config_at(&boxing_config::config_path()?, action),
         Some(Command::Mcp { action }) => run_mcp(action),
         Some(Command::Acp) => acp::run_acp_server().await,
+        Some(Command::Voice) => run_voice().await,
         Some(Command::Cron { action }) => run_cron(action),
     }
 }
@@ -863,6 +866,20 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// 启动语音运行时 HTTP 服务。
+async fn run_voice() -> anyhow::Result<()> {
+    let config = boxing_voice::VoiceConfig::from_env()?;
+    let runtime = std::sync::Arc::new(boxing_voice::VoiceRuntime::new());
+    let (events, _) = tokio::sync::broadcast::channel(128);
+    let state = boxing_voice::server::AppState {
+        config: std::sync::Arc::new(config),
+        runtime,
+        events,
+    };
+    eprintln!("boxing-agent voice runtime starting...");
+    boxing_voice::server::serve(state).await
 }
 
 use std::io::Write as _;

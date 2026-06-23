@@ -4,6 +4,7 @@ members = [
     "crates/boxing-config",
     "crates/boxing-state",
     "crates/boxing-providers",
+    "crates/boxing-voice",
     "crates/boxing-tools",
     "crates/boxing-core",
     "crates/boxing-cli",
@@ -36,6 +37,7 @@ boxing-config = { path = "crates/boxing-config" }
 boxing-providers = { path = "crates/boxing-providers" }
 boxing-core = { path = "crates/boxing-core" }
 boxing-tools = { path = "crates/boxing-tools" }
+boxing-voice = { path = "crates/boxing-voice", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 boxing-state = { path = "crates/boxing-state" }
 uuid = { version = "1", features = ["v4"] }
