@@ -116,6 +116,8 @@ impl AcpServer {
         match req.method.as_str() {
             "initialize" => Ok(Some(self.handle_initialize())),
             "session/new" => Ok(Some(self.handle_new_session(&req.params)?)),
+            "session/load" => Ok(Some(self.handle_load_session(&req.params)?)),
+            "session/resume" => Ok(Some(self.handle_resume_session(&req.params)?)),
             "session/prompt" => Ok(Some(self.handle_prompt(&req.params).await?)),
             "session/cancel" => {
                 self.handle_cancel(&req.params)?;
@@ -175,6 +177,178 @@ impl AcpServer {
             "models": [{"id": model, "name": model}],
             "modes": [{"name": "default", "kind": "primary"}],
         }))
+    }
+
+    /// session/load：加载已有会话（从 state.db 恢复历史）。
+    ///
+    /// 与 Python `load_session` 对等：
+    /// - 如果 session_id 存在于内存 → 更新 cwd
+    /// - 如果不存在 → 从 state.db 查找（跨进程恢复）
+    /// - 回放历史消息作为 session/update 通知
+    fn handle_load_session(&self, params: &Value) -> Result<Value, (i32, String)> {
+        let session_id = params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 sessionId".to_string()))?;
+
+        let cwd = params
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+
+        // 1. 检查内存中的会话
+        let found = {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.get_mut(session_id) {
+                session.cwd = PathBuf::from(cwd);
+                true
+            } else {
+                false
+            }
+        };
+
+        if !found {
+            // 2. 尝试从 state.db 恢复（跨进程持久化会话）
+            let model = self
+                .try_load_from_state_db(session_id)
+                .map_err(|e| (-32603, format!("加载会话失败: {e}")))?;
+
+            let model = model.unwrap_or_else(|| "mimo-v2.5-pro".to_string());
+            let session = AcpSession {
+                session_id: session_id.to_string(),
+                cwd: PathBuf::from(cwd),
+                model,
+                system: String::new(),
+                max_turns: 30,
+                max_tokens: 4096,
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            };
+            self.sessions.lock().unwrap().insert(session_id.to_string(), session);
+        }
+
+        // 3. 回放历史（best-effort，从 state.db 读取）
+        let _ = self.replay_history(session_id);
+
+        // 4. 返回会话信息
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(session_id).ok_or((-32602, "会话恢复失败".to_string()))?;
+
+        Ok(json!({
+            "models": [{"id": session.model, "name": session.model}],
+            "modes": [{"name": "default", "kind": "primary"}],
+        }))
+    }
+
+    /// session/resume：恢复会话（与 load 类似，但不存在时创建新的）。
+    fn handle_resume_session(&self, params: &Value) -> Result<Value, (i32, String)> {
+        let session_id = params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 sessionId".to_string()))?;
+
+        let cwd = params
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+
+        // 检查内存
+        let found = {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.get_mut(session_id) {
+                session.cwd = PathBuf::from(cwd);
+                true
+            } else {
+                false
+            }
+        };
+
+        if !found {
+            // 从 state.db 恢复或创建新会话
+            let model = self
+                .try_load_from_state_db(session_id)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "mimo-v2.5-pro".to_string());
+
+            let session = AcpSession {
+                session_id: session_id.to_string(),
+                cwd: PathBuf::from(cwd),
+                model,
+                system: String::new(),
+                max_turns: 30,
+                max_tokens: 4096,
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            };
+            self.sessions.lock().unwrap().insert(session_id.to_string(), session);
+        }
+
+        // 回放历史
+        let _ = self.replay_history(session_id);
+
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(session_id).ok_or((-32602, "会话恢复失败".to_string()))?;
+
+        Ok(json!({
+            "sessionId": session_id,
+            "models": [{"id": session.model, "name": session.model}],
+            "modes": [{"name": "default", "kind": "primary"}],
+        }))
+    }
+
+    /// 从 state.db 查找会话的 model（跨进程恢复）。
+    fn try_load_from_state_db(&self, session_id: &str) -> anyhow::Result<Option<String>> {
+        let db_path = boxing_config::state_db_path()?;
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        let summaries = boxing_state::SessionStore::open(&db_path)?.session_summaries()?;
+        Ok(summaries.into_iter().find(|s| s.id == session_id).and_then(|s| s.model))
+    }
+
+    /// 回放会话历史（从 state.db 读取消息，发送 session/update 通知）。
+    fn replay_history(&self, session_id: &str) -> anyhow::Result<()> {
+        let db_path = boxing_config::state_db_path()?;
+        if !db_path.exists() {
+            return Ok(());
+        }
+
+        // 直接查询 messages 表（只读）
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+
+        let mut stmt = conn.prepare(
+            "SELECT role, content FROM messages \
+             WHERE session_id = ?1 AND content IS NOT NULL \
+             ORDER BY timestamp ASC",
+        )?;
+
+        let messages: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params![session_id], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                ))
+            })?
+            .flatten()
+            .collect();
+
+        for (role, content) in messages {
+            let speaker = match role.as_str() {
+                "user" => "👤",
+                "assistant" => "🤖",
+                _ => "🔧",
+            };
+            let preview: String = content.chars().take(200).collect();
+            Self::send_notification(
+                session_id,
+                "history",
+                &format!("{speaker} {preview}"),
+            );
+        }
+
+        Ok(())
     }
 
     async fn handle_prompt(&self, params: &Value) -> Result<Value, (i32, String)> {

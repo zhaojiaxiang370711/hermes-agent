@@ -138,6 +138,7 @@ dependencies = [
  "boxing-state",
  "boxing-tools",
  "clap",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",
