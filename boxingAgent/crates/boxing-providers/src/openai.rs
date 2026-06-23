@@ -145,7 +145,7 @@ fn to_openai_messages(msgs: &[ChatMessage]) -> Vec<OpenAiMessage> {
     msgs.iter()
         .map(|m| OpenAiMessage {
             role: m.role.clone(),
-            content: m.content.clone(),
+            content: build_openai_content(&m.content, &m.images),
             tool_calls: m.tool_calls.as_ref().map(|tcs| {
                 tcs.iter()
                     .map(|tc| OpenAiMsgToolCall {
@@ -163,11 +163,26 @@ fn to_openai_messages(msgs: &[ChatMessage]) -> Vec<OpenAiMessage> {
         .collect()
 }
 
+/// 构建 OpenAI 消息内容：纯文本或带图片的多模态内容。
+fn build_openai_content(text: &str, images: &[String]) -> serde_json::Value {
+    if images.is_empty() {
+        serde_json::Value::String(text.to_string())
+    } else {
+        let mut parts = vec![serde_json::json!({"type": "text", "text": text})];
+        for img in images {
+            parts.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": {"url": img}
+            }));
+        }
+        serde_json::Value::Array(parts)
+    }
+}
+
 #[derive(Serialize)]
 struct OpenAiMessage {
     role: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    content: String,
+    content: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OpenAiMsgToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -442,12 +457,14 @@ mod tests {
                 arguments: "{\"command\":\"ls\"}".into(),
             }]),
             tool_call_id: None,
+            images: Vec::new(),
         });
         r.messages.push(ChatMessage {
             role: "tool".into(),
             content: "a.rs\nb.rs".into(),
             tool_calls: None,
             tool_call_id: Some("call_1".into()),
+            images: Vec::new(),
         });
         let resp = p.complete(&r).await.unwrap();
         assert_eq!(resp.content, "done");

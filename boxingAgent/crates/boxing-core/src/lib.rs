@@ -181,6 +181,7 @@ impl Agent {
                     None
                 },
                 tool_call_id: None,
+                images: Vec::new(),
             };
             persist_msg(&self.store, &session_id, &assistant_msg)?;
             messages.push(assistant_msg);
@@ -205,6 +206,7 @@ impl Agent {
                     content: result,
                     tool_calls: None,
                     tool_call_id: Some(tc.id),
+                    images: Vec::new(),
                 };
                 persist_msg(&self.store, &session_id, &tool_msg)?;
                 messages.push(tool_msg);

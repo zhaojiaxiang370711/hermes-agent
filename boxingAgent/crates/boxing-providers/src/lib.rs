@@ -57,6 +57,10 @@ pub struct ChatMessage {
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// 多模态图片（base64 data URL，如 "data:image/jpeg;base64,..."）。
+    /// 视觉模型使用。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 impl ChatMessage {
@@ -66,6 +70,7 @@ impl ChatMessage {
             content: content.into(),
             tool_calls: None,
             tool_call_id: None,
+            images: Vec::new(),
         }
     }
 }

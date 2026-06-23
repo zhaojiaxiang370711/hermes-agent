@@ -206,10 +206,32 @@ fn to_anthropic_messages(msgs: &[ChatMessage]) -> (Option<String>, Vec<Anthropic
                     system = Some(m.content.clone());
                 }
             }
-            "user" => out.push(AnthropicMessage {
-                role: "user".into(),
-                content: AnthropicContent::Str(m.content.clone()),
-            }),
+            "user" => {
+                if m.images.is_empty() {
+                    out.push(AnthropicMessage {
+                        role: "user".into(),
+                        content: AnthropicContent::Str(m.content.clone()),
+                    });
+                } else {
+                    let mut blocks = vec![serde_json::json!({"type": "text", "text": m.content})];
+                    for img in &m.images {
+                        // 解析 data URL: data:image/jpeg;base64,xxxxx
+                        let (media_type, data) = parse_data_url(img);
+                        blocks.push(serde_json::json!({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": data,
+                            }
+                        }));
+                    }
+                    out.push(AnthropicMessage {
+                        role: "user".into(),
+                        content: AnthropicContent::Blocks(blocks),
+                    });
+                }
+            }
             "assistant" => {
                 if let Some(tcs) = &m.tool_calls {
                     let mut blocks = Vec::new();
@@ -249,6 +271,18 @@ fn to_anthropic_messages(msgs: &[ChatMessage]) -> (Option<String>, Vec<Anthropic
 }
 
 /// 把累积的 tool_result 冲刷成一条 user 消息。
+/// 解析 data URL，返回 (media_type, base64_data)。
+fn parse_data_url(data_url: &str) -> (&str, &str) {
+    if let Some(rest) = data_url.strip_prefix("data:") {
+        if let Some((meta, data)) = rest.split_once(';') {
+            if let Some(b64) = data.strip_prefix("base64,") {
+                return (meta, b64);
+            }
+        }
+    }
+    ("image/jpeg", data_url) // fallback
+}
+
 fn flush_results(out: &mut Vec<AnthropicMessage>, pending: &mut Vec<serde_json::Value>) {
     if !pending.is_empty() {
         let blocks = std::mem::take(pending);
@@ -537,12 +571,14 @@ mod tests {
                 arguments: "{\"command\":\"ls\"}".into(),
             }]),
             tool_call_id: None,
+            images: Vec::new(),
         });
         r.messages.push(ChatMessage {
             role: "tool".into(),
             content: "a.rs".into(),
             tool_calls: None,
             tool_call_id: Some("tu_1".into()),
+            images: Vec::new(),
         });
         let resp = p.complete(&r).await.unwrap();
         assert_eq!(resp.content, "done");

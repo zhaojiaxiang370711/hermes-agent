@@ -18,6 +18,7 @@ pub mod oauth;
 pub mod read;
 pub mod search;
 pub mod todo;
+pub mod vision;
 pub mod write;
 
 pub use bash::Bash;
@@ -30,9 +31,10 @@ pub use memory::Memory;
 pub use read::Read;
 pub use search::SessionSearch;
 pub use todo::Todo;
+pub use vision::Vision;
 pub use write::Write;
 
-/// 返回全部 11 个默认工具（Phase 2a + Phase 3 编码集 + clarify）。
+/// 返回全部 12 个默认工具（Phase 2a + Phase 3 + vision）。
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
     let home = hermes_home();
     vec![
@@ -44,6 +46,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(Glob),
         Box::new(Ls),
         Box::new(Clarify),
+        Box::new(Vision),
         Box::new(Todo::new()),
         Box::new(Memory::new(&home)),
         Box::new(SessionSearch::new(home.join("state.db"))),
@@ -144,7 +147,7 @@ mod tests {
 mod catalog_tests {
     use super::*;
 
-    /// 实现的工具集必须恰好是 catalog 中的 11 个，名字一致。
+    /// 实现的工具集必须恰好是 catalog 中的 12 个，名字一致。
     #[test]
     fn default_tools_match_catalog() {
         const CATALOG: &str = include_str!("../../../specs/tools-phase2a.yaml");
@@ -159,6 +162,7 @@ mod catalog_tests {
             "glob",
             "ls",
             "clarify",
+            "vision",
             "todo",
             "memory",
             "session_search",
