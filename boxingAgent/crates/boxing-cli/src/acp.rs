@@ -41,10 +41,30 @@ struct AcpSession {
     session_id: String,
     cwd: PathBuf,
     model: String,
+    mode: String,
     system: String,
     max_turns: usize,
     max_tokens: u32,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// 任意 config options（ACP setConfigOption）。
+    config_options: HashMap<String, String>,
+}
+
+impl AcpSession {
+    /// 克隆为 fork 目标（新 session_id，重置 cancel flag）。
+    fn cloned_for_fork(&self, new_id: &str, cwd: &str) -> Option<AcpSession> {
+        Some(AcpSession {
+            session_id: new_id.to_string(),
+            cwd: PathBuf::from(cwd),
+            model: self.model.clone(),
+            mode: self.mode.clone(),
+            system: self.system.clone(),
+            max_turns: self.max_turns,
+            max_tokens: self.max_tokens,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            config_options: self.config_options.clone(),
+        })
+    }
 }
 
 // ===== ACP 服务端 =====
@@ -118,12 +138,16 @@ impl AcpServer {
             "session/new" => Ok(Some(self.handle_new_session(&req.params)?)),
             "session/load" => Ok(Some(self.handle_load_session(&req.params)?)),
             "session/resume" => Ok(Some(self.handle_resume_session(&req.params)?)),
+            "session/fork" => Ok(Some(self.handle_fork_session(&req.params)?)),
             "session/prompt" => Ok(Some(self.handle_prompt(&req.params).await?)),
             "session/cancel" => {
                 self.handle_cancel(&req.params)?;
                 Ok(Some(json!({})))
             }
             "session/list" => Ok(Some(self.handle_list_sessions())),
+            "session/setModel" => Ok(Some(self.handle_set_model(&req.params)?)),
+            "session/setMode" => Ok(Some(self.handle_set_mode(&req.params)?)),
+            "session/setConfigOption" => Ok(Some(self.handle_set_config(&req.params)?)),
             _ => Err((-32601, format!("未知方法: {}", req.method))),
         }
     }
@@ -164,10 +188,12 @@ impl AcpServer {
             session_id: session_id.clone(),
             cwd: PathBuf::from(cwd),
             model: model.to_string(),
+            mode: "default".to_string(),
             system: String::new(),
             max_turns: 30,
             max_tokens: 4096,
             cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            config_options: HashMap::new(),
         };
 
         self.sessions.lock().unwrap().insert(session_id.clone(), session);
@@ -218,10 +244,12 @@ impl AcpServer {
                 session_id: session_id.to_string(),
                 cwd: PathBuf::from(cwd),
                 model,
+                mode: "default".to_string(),
                 system: String::new(),
                 max_turns: 30,
                 max_tokens: 4096,
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                config_options: HashMap::new(),
             };
             self.sessions.lock().unwrap().insert(session_id.to_string(), session);
         }
@@ -274,10 +302,12 @@ impl AcpServer {
                 session_id: session_id.to_string(),
                 cwd: PathBuf::from(cwd),
                 model,
+                mode: "default".to_string(),
                 system: String::new(),
                 max_turns: 30,
                 max_tokens: 4096,
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                config_options: HashMap::new(),
             };
             self.sessions.lock().unwrap().insert(session_id.to_string(), session);
         }
@@ -482,6 +512,120 @@ impl AcpServer {
         json!({
             "sessions": infos,
         })
+    }
+
+    /// session/fork：从已有会话分叉（新 session_id，继承 model/cwd/mode）。
+    fn handle_fork_session(&self, params: &Value) -> Result<Value, (i32, String)> {
+        let parent_id = params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 sessionId".to_string()))?;
+
+        let cwd = params
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+
+        let new_id = format!(
+            "boxing-{}",
+            self.next_session.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        );
+
+        // 从父会话克隆状态
+        let parent = {
+            let sessions = self.sessions.lock().unwrap();
+            sessions.get(parent_id).and_then(|s| s.cloned_for_fork(&new_id, cwd))
+        };
+
+        let parent = parent.ok_or((-32602, format!("会话不存在: {parent_id}")))?;
+
+        let model = parent.model.clone();
+        self.sessions.lock().unwrap().insert(new_id.clone(), parent);
+
+        Ok(json!({
+            "sessionId": new_id,
+            "models": [{"id": model, "name": model}],
+            "modes": [{"name": "default", "kind": "primary"}],
+        }))
+    }
+
+    /// session/setModel：切换会话的模型。
+    fn handle_set_model(&self, params: &Value) -> Result<Value, (i32, String)> {
+        let session_id = params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 sessionId".to_string()))?;
+
+        let model_id = params
+            .get("modelId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 modelId".to_string()))?;
+
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or((-32602, format!("会话不存在: {session_id}")))?;
+        session.model = model_id.to_string();
+
+        Ok(json!({}))
+    }
+
+    /// session/setMode：切换会话模式（default/plan 等）。
+    fn handle_set_mode(&self, params: &Value) -> Result<Value, (i32, String)> {
+        let session_id = params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 sessionId".to_string()))?;
+
+        let mode_id = params
+            .get("modeId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or((-32602, format!("会话不存在: {session_id}")))?;
+        session.mode = mode_id.to_string();
+
+        Ok(json!({}))
+    }
+
+    /// session/setConfigOption：设置 ACP 配置选项。
+    fn handle_set_config(&self, params: &Value) -> Result<Value, (i32, String)> {
+        let session_id = params
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 sessionId".to_string()))?;
+
+        let config_id = params
+            .get("configId")
+            .and_then(|v| v.as_str())
+            .ok_or((-32602, "缺少 configId".to_string()))?;
+
+        let value = params
+            .get("value")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or((-32602, format!("会话不存在: {session_id}")))?;
+
+        // edit_approval_policy → 映射到 mode
+        if config_id == "edit_approval_policy" {
+            let mode = match value {
+                "always" | "plan" => "plan",
+                "never" | "auto" => "default",
+                _ => "default",
+            };
+            session.mode = mode.to_string();
+        } else {
+            session.config_options.insert(config_id.to_string(), value.to_string());
+        }
+
+        Ok(json!({"configOptions": []}))
     }
 
     // ===== 输出辅助 =====
