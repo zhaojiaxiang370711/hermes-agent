@@ -252,6 +252,10 @@ async fn run_chat(
                     eprintln!("{} {name}", if ok { "✓" } else { "✗" })
                 }
                 boxing_core::LoopEvent::MaxTurns => eprintln!("boxing-agent: 达到最大轮数"),
+                boxing_core::LoopEvent::Cancelled => eprintln!("boxing-agent: 已取消"),
+                boxing_core::LoopEvent::ToolApproval { tool, approved } => {
+                    eprintln!("{} {tool}", if approved { "✓(approved)" } else { "✗(denied)" });
+                }
             },
         )
         .await

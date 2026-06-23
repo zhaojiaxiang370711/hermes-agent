@@ -415,9 +415,9 @@ impl AcpServer {
         let mut agent =
             boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
 
-        // 运行 agent loop
+        // 运行 agent loop（带 cancel flag，支持 ACP cancel 真实中断）
         let result = agent
-            .run(&prompt_text, &mut |delta| {
+            .run_with_cancel(&prompt_text, &mut |delta| {
                 Self::send_notification(session_id, "agent_text_chunk", delta);
             }, &mut |event| {
                 let (update_type, text) = match &event {
@@ -427,9 +427,14 @@ impl AcpServer {
                         ("tool_result", format!("{mark} {name}"))
                     }
                     boxing_core::LoopEvent::MaxTurns => ("max_turns", "达到最大轮数".to_string()),
+                    boxing_core::LoopEvent::Cancelled => ("cancelled", "已取消".to_string()),
+                    boxing_core::LoopEvent::ToolApproval { tool, approved } => {
+                        let mark = if *approved { "✓" } else { "✗" };
+                        ("tool_approval", format!("{mark} {tool}"))
+                    }
                 };
                 Self::send_notification(session_id, update_type, &text);
-            })
+            }, Some(Arc::clone(&cancel)))
             .await;
 
         match result {

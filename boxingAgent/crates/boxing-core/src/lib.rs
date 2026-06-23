@@ -46,6 +46,9 @@ pub enum LoopEvent {
     ToolCall { name: String },
     ToolResult { name: String, ok: bool },
     MaxTurns,
+    Cancelled,
+    /// 工具审批请求（ACP edit approval，IDE 可拦截 write/edit/bash）。
+    ToolApproval { tool: String, approved: bool },
 }
 
 /// Hermes 格式的工具调用持久化结构。
@@ -97,11 +100,24 @@ impl Agent {
 
     /// 工具调用循环。返回最终回答（中间轮文本已通过 `on_delta` 流式输出）。
     /// 状态写入失败时传播错误。
+    ///
+    /// `cancel`: 如果 Some(flag)，每轮检查是否被取消（中断当前轮）。
     pub async fn run(
         &mut self,
         user_message: &str,
         on_delta: &mut impl FnMut(&str),
         on_event: &mut impl FnMut(LoopEvent),
+    ) -> anyhow::Result<String> {
+        self.run_with_cancel(user_message, on_delta, on_event, None).await
+    }
+
+    /// 带 cancel flag 的 run（ACP 用）。
+    pub async fn run_with_cancel(
+        &mut self,
+        user_message: &str,
+        on_delta: &mut impl FnMut(&str),
+        on_event: &mut impl FnMut(LoopEvent),
+        cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     ) -> anyhow::Result<String> {
         let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -137,6 +153,13 @@ impl Agent {
         messages.push(user_msg);
 
         for _ in 0..self.max_turns {
+            // 取消检查（ACP cancel 语义）
+            if let Some(ref flag) = cancel {
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    on_event(LoopEvent::Cancelled);
+                    return Ok(String::new());
+                }
+            }
             let turn = self.step(&messages, on_delta).await?;
             let has_tools = !turn.tool_calls.is_empty();
 
