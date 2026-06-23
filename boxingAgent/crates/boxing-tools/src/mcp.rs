@@ -85,7 +85,7 @@ fn default_timeout() -> u64 {
 }
 
 impl McpServerConfig {
-    fn transport_type(&self) -> TransportType {
+    pub fn transport_type(&self) -> TransportType {
         if !self.url.is_empty() && self.transport == "sse" {
             TransportType::Sse
         } else if !self.url.is_empty() {
@@ -94,10 +94,13 @@ impl McpServerConfig {
             TransportType::Stdio
         }
     }
+    pub fn is_stdio(&self) -> bool { self.transport_type() == TransportType::Stdio }
+    pub fn is_http(&self) -> bool { self.transport_type() == TransportType::Http }
+    pub fn is_sse(&self) -> bool { self.transport_type() == TransportType::Sse }
 }
 
 #[derive(Debug, PartialEq)]
-enum TransportType {
+pub enum TransportType {
     Stdio,
     Http,
     Sse,

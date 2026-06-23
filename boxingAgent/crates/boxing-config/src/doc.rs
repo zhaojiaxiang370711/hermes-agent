@@ -69,6 +69,45 @@ impl ConfigDoc {
         set_recursive(&mut self.root, &parts, parse_scalar(value))
     }
 
+    /// Set a pre-parsed YAML value at a dotted path（用于嵌套结构如 MCP server config）。
+    pub fn set_yaml(&mut self, dotted: &str, value: serde_yaml::Value) -> Result<(), SetError> {
+        let parts: Vec<&str> = dotted.split('.').collect();
+        set_recursive(&mut self.root, &parts, value)
+    }
+
+    /// Delete a key at a dotted path（用于 mcp remove 等）。
+    pub fn remove_key(&mut self, dotted: &str) -> Result<(), SetError> {
+        let parts: Vec<&str> = dotted.split('.').collect();
+        if parts.is_empty() {
+            return Ok(());
+        }
+        let key = serde_yaml::Value::String(parts.last().unwrap().to_string());
+        let parent = if parts.len() == 1 {
+            &mut self.root
+        } else {
+            // navigate to parent
+            let parent_path = &parts[..parts.len() - 1];
+            let mut cursor = &mut self.root;
+            for part in parent_path {
+                let k = serde_yaml::Value::String(part.to_string());
+                cursor = match cursor {
+                    serde_yaml::Value::Mapping(m) => {
+                        if !m.contains_key(&k) {
+                            return Ok(()); // key doesn't exist, nothing to remove
+                        }
+                        m.get_mut(&k).unwrap()
+                    }
+                    _ => return Ok(()),
+                };
+            }
+            cursor
+        };
+        if let serde_yaml::Value::Mapping(m) = parent {
+            m.remove(&key);
+        }
+        Ok(())
+    }
+
     fn lookup(&self, dotted: &str) -> Result<&serde_yaml::Value, GetError> {
         let mut cursor = &self.root;
         for (i, part) in dotted.split('.').enumerate() {

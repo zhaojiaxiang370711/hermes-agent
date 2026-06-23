@@ -46,8 +46,63 @@ pub enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// MCP server management.
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
     /// Model selection (Phase 1b).
     Model,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum McpAction {
+    /// List configured MCP servers.
+    List,
+    /// Add a new MCP server.
+    Add {
+        /// Server name.
+        name: String,
+        /// HTTP/SSE URL (for remote servers).
+        #[arg(long)]
+        url: Option<String>,
+        /// Command to run (for stdio servers).
+        #[arg(long)]
+        command: Option<String>,
+        /// Arguments for the command (use -- to separate flags).
+        #[arg(long, num_args = 1.., allow_hyphen_values = true)]
+        args: Vec<String>,
+        /// Transport type: "stdio" (default) or "sse".
+        #[arg(long)]
+        transport: Option<String>,
+        /// Environment variable (key=value, repeatable).
+        #[arg(long = "env", value_name = "KEY=VAL")]
+        env: Vec<String>,
+        /// Custom header (key:value, repeatable, for HTTP servers).
+        #[arg(long = "header", value_name = "KEY:VAL")]
+        headers: Vec<String>,
+        /// Tool call timeout in seconds (default: 300).
+        #[arg(long, default_value = "300")]
+        timeout: u64,
+    },
+    /// Remove an MCP server from config.
+    Remove {
+        /// Server name to remove.
+        name: String,
+        /// Skip confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Test connection to an MCP server.
+    Test {
+        /// Server name to test.
+        name: String,
+    },
+    /// Force re-authentication for an OAuth-based MCP server.
+    Login {
+        /// Server name to re-authenticate.
+        name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -202,6 +257,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => {
             run_config_at(&boxing_config::config_path()?, action)
         }
+        Some(Command::Mcp { action }) => {
+            run_mcp(action)
+        }
     }
 }
 
@@ -229,6 +287,265 @@ pub fn run_config_at(path: &Path, action: ConfigAction) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// MCP 子命令入口。
+fn run_mcp(action: McpAction) -> anyhow::Result<()> {
+    let config_path = boxing_config::config_path()?;
+    let mut doc = boxing_config::load_or_default(&config_path)?;
+    let hermes_home = boxing_config::hermes_home().unwrap_or_else(|_| {
+        std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+        ).join(".hermes")
+    });
+
+    match action {
+        McpAction::List => {
+            let mcp_yaml = doc.get("mcp_servers").unwrap_or_default();
+            if mcp_yaml.is_empty() || mcp_yaml.trim() == "{}" || mcp_yaml.trim() == "[]" {
+                println!("\n  未配置 MCP 服务器。\n");
+                println!("  使用以下命令添加：");
+                println!("    boxing-agent mcp add <name> --command <cmd> --args <args...>");
+                println!("    boxing-agent mcp add <name> --url <endpoint>\n");
+                return Ok(());
+            }
+
+            let servers: HashMap<String, boxing_tools::mcp::McpServerConfig> =
+                serde_yaml::from_str(&mcp_yaml)
+                    .map_err(|e| anyhow::anyhow!("解析 mcp_servers 失败: {e}"))?;
+
+            println!("\n  MCP Servers:");
+            println!();
+            println!("  {:<16} {:<12} {:<30}", "Name", "Transport", "Endpoint");
+            println!("  {} {} {}", "─".repeat(16), "─".repeat(12), "─".repeat(30));
+
+            for (name, cfg) in &servers {
+                let transport = if cfg.is_sse() {
+                    "SSE".to_string()
+                } else if cfg.is_http() {
+                    "HTTP".to_string()
+                } else {
+                    "stdio".to_string()
+                };
+                let endpoint = if !cfg.url.is_empty() {
+                    cfg.url.clone()
+                } else {
+                    format!("{} {}", cfg.command, cfg.args.join(" "))
+                };
+                println!("  {:<16} {:<12} {}", name, transport, endpoint);
+            }
+            println!();
+        }
+
+        McpAction::Add { name, url, command, args, transport, env, headers, timeout } => {
+            if url.is_none() && command.is_none() {
+                anyhow::bail!("必须指定 --url 或 --command");
+            }
+
+            // 构建 server config YAML value
+            let mut server_map = serde_yaml::Mapping::new();
+            if let Some(cmd) = &command {
+                server_map.insert(
+                    serde_yaml::Value::String("command".into()),
+                    serde_yaml::Value::String(cmd.clone()),
+                );
+            }
+            if !args.is_empty() {
+                server_map.insert(
+                    serde_yaml::Value::String("args".into()),
+                    serde_yaml::Value::Sequence(
+                        args.iter().map(|a| serde_yaml::Value::String(a.clone())).collect(),
+                    ),
+                );
+            }
+            if let Some(u) = &url {
+                server_map.insert(
+                    serde_yaml::Value::String("url".into()),
+                    serde_yaml::Value::String(u.clone()),
+                );
+            }
+            if let Some(t) = &transport {
+                server_map.insert(
+                    serde_yaml::Value::String("transport".into()),
+                    serde_yaml::Value::String(t.clone()),
+                );
+            }
+            if !env.is_empty() {
+                let mut env_map = serde_yaml::Mapping::new();
+                for e in &env {
+                    if let Some((k, v)) = e.split_once('=') {
+                        env_map.insert(
+                            serde_yaml::Value::String(k.to_string()),
+                            serde_yaml::Value::String(v.to_string()),
+                        );
+                    }
+                }
+                server_map.insert(
+                    serde_yaml::Value::String("env".into()),
+                    serde_yaml::Value::Mapping(env_map),
+                );
+            }
+            if !headers.is_empty() {
+                let mut hdr_map = serde_yaml::Mapping::new();
+                for h in &headers {
+                    if let Some((k, v)) = h.split_once(':') {
+                        hdr_map.insert(
+                            serde_yaml::Value::String(k.trim().to_string()),
+                            serde_yaml::Value::String(v.trim().to_string()),
+                        );
+                    }
+                }
+                server_map.insert(
+                    serde_yaml::Value::String("headers".into()),
+                    serde_yaml::Value::Mapping(hdr_map),
+                );
+            }
+            server_map.insert(
+                serde_yaml::Value::String("timeout".into()),
+                serde_yaml::Value::Number(serde_yaml::Number::from(timeout)),
+            );
+
+            // 写入 config.yaml: mcp_servers.<name>
+            doc.set_yaml(
+                &format!("mcp_servers.{name}"),
+                serde_yaml::Value::Mapping(server_map),
+            ).map_err(|e| anyhow::anyhow!("{e}"))?;
+            boxing_config::save(&config_path, &doc)?;
+            println!("已添加 MCP 服务器 '{name}'");
+        }
+
+        McpAction::Remove { name, yes } => {
+            let existing = doc.get("mcp_servers").unwrap_or_default();
+            let servers: HashMap<String, serde_yaml::Value> =
+                serde_yaml::from_str(&existing).unwrap_or_default();
+
+            if !servers.contains_key(&name) {
+                anyhow::bail!("服务器 '{name}' 不在配置中");
+            }
+
+            if !yes {
+                print!("确认删除 '{name}'? [y/N] ");
+                std::io::stdout().flush().ok();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("已取消。");
+                    return Ok(());
+                }
+            }
+
+            // 从 config.yaml 删除
+            doc.remove_key(&format!("mcp_servers.{name}"))
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            boxing_config::save(&config_path, &doc)?;
+
+            // 清理 OAuth tokens
+            let token_storage = boxing_tools::oauth::TokenStorage::new(&hermes_home, &name);
+            token_storage.remove();
+
+            println!("已删除 '{name}'");
+        }
+
+        McpAction::Test { name } => {
+            let mcp_yaml = doc.get("mcp_servers").unwrap_or_default();
+            let servers: HashMap<String, boxing_tools::mcp::McpServerConfig> =
+                serde_yaml::from_str(&mcp_yaml)
+                    .map_err(|e| anyhow::anyhow!("解析 mcp_servers 失败: {e}"))?;
+
+            let config = servers.get(&name)
+                .ok_or_else(|| anyhow::anyhow!("服务器 '{name}' 不在配置中"))?;
+
+            println!("\n  测试 '{name}'...");
+
+            let transport = if config.is_sse() {
+                "SSE"
+            } else if config.is_http() {
+                "HTTP"
+            } else {
+                "stdio"
+            };
+            let endpoint = if !config.url.is_empty() {
+                &config.url
+            } else {
+                &config.command
+            };
+            println!("  传输: {} → {}", transport, endpoint);
+
+            match boxing_tools::mcp::McpClient::connect(&name, config) {
+                Ok(client) => {
+                    match client.list_tools() {
+                        Ok(tools) => {
+                            println!("  ✓ 连接成功，发现 {} 个工具", tools.len());
+                            for t in tools.iter().take(5) {
+                                println!("    • {} — {}", t.name, t.description.chars().take(60).collect::<String>());
+                            }
+                            if tools.len() > 5 {
+                                println!("    ... 还有 {} 个", tools.len() - 5);
+                            }
+                        }
+                        Err(e) => {
+                            println!("  ✗ 连接成功但 tools/list 失败: {e}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("  ✗ 连接失败: {e}");
+                }
+            }
+            println!();
+        }
+
+        McpAction::Login { name } => {
+            let mcp_yaml = doc.get("mcp_servers").unwrap_or_default();
+            let servers: HashMap<String, boxing_tools::mcp::McpServerConfig> =
+                serde_yaml::from_str(&mcp_yaml)
+                    .map_err(|e| anyhow::anyhow!("解析 mcp_servers 失败: {e}"))?;
+
+            let config = servers.get(&name)
+                .ok_or_else(|| anyhow::anyhow!("服务器 '{name}' 不在配置中"))?;
+
+            if config.url.is_empty() {
+                anyhow::bail!("服务器 '{name}' 没有 URL — stdio 服务器不支持 OAuth");
+            }
+
+            // 清除旧 tokens
+            let token_storage = boxing_tools::oauth::TokenStorage::new(&hermes_home, &name);
+            token_storage.remove();
+            println!("已清除 '{name}' 的旧 OAuth tokens");
+
+            // 获取或创建 OAuth 配置
+            let oauth_config = config.oauth.clone().unwrap_or_default();
+
+            let oauth_client = boxing_tools::oauth::OAuthClient::new(
+                &config.url,
+                &oauth_config,
+                &hermes_home,
+                &name,
+            );
+
+            println!("启动 OAuth 授权流程...");
+            match oauth_client.authorize() {
+                Ok(token) => {
+                    println!("\n  ✓ OAuth 授权成功！");
+                    println!("    access_token: {}...", &token.access_token[..token.access_token.len().min(12)]);
+                    if token.can_refresh() {
+                        println!("    refresh_token: 已保存");
+                    }
+                    println!("    过期时间: {} 秒后", (token.expires_at - std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64()) as u64);
+                }
+                Err(e) => {
+                    anyhow::bail!("OAuth 授权失败: {e}");
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+use std::io::Write as _;
 
 #[cfg(test)]
 mod tests {

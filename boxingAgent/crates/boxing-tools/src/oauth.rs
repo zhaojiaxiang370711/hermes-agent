@@ -29,7 +29,7 @@ use crate::ToolError;
 // ===== 类型 =====
 
 /// OAuth 服务器配置（config.yaml 中 per-server 的 oauth 配置）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OAuthConfig {
     #[serde(default)]
     pub client_id: String,
