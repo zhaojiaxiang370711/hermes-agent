@@ -12,7 +12,7 @@
 //! - blueprint/suggestion 系统
 //! - 工作目录隔离
 
-use chrono::{Datelike, Timelike, TimeZone, Utc};
+use chrono::{Datelike, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -51,11 +51,11 @@ fn default_status() -> String {
 /// 解析后的 cron 表达式（5 字段）。
 #[derive(Debug, Clone)]
 pub struct CronSchedule {
-    minutes: Vec<u32>,   // 0-59
-    hours: Vec<u32>,     // 0-23
-    days: Vec<u32>,      // 1-31
-    months: Vec<u32>,    // 1-12
-    weekdays: Vec<u32>,  // 0-6 (0=Sunday)
+    minutes: Vec<u32>,  // 0-59
+    hours: Vec<u32>,    // 0-23
+    days: Vec<u32>,     // 1-31
+    months: Vec<u32>,   // 1-12
+    weekdays: Vec<u32>, // 0-6 (0=Sunday)
 }
 
 impl FromStr for CronSchedule {
@@ -93,10 +93,16 @@ fn parse_field(field: &str, min: u32, max: u32) -> Result<Vec<u32>, String> {
         let (start, end) = if range_part == "*" {
             (min, max)
         } else if let Some((lo, hi)) = range_part.split_once('-') {
-            (lo.parse().map_err(|e: std::num::ParseIntError| format!("范围无效: {e}"))?,
-             hi.parse().map_err(|e: std::num::ParseIntError| format!("范围无效: {e}"))?)
+            (
+                lo.parse()
+                    .map_err(|e: std::num::ParseIntError| format!("范围无效: {e}"))?,
+                hi.parse()
+                    .map_err(|e: std::num::ParseIntError| format!("范围无效: {e}"))?,
+            )
         } else {
-            let v: u32 = range_part.parse().map_err(|e: std::num::ParseIntError| format!("值无效: {e}"))?;
+            let v: u32 = range_part
+                .parse()
+                .map_err(|e: std::num::ParseIntError| format!("值无效: {e}"))?;
             (v, v)
         };
 
@@ -129,7 +135,9 @@ impl CronSchedule {
             .unwrap();
 
         // 最多搜索一年（防止无限循环）
-        let limit = after_dt.checked_add_signed(chrono::Duration::days(366)).unwrap();
+        let limit = after_dt
+            .checked_add_signed(chrono::Duration::days(366))
+            .unwrap();
 
         loop {
             if dt > limit {
@@ -138,7 +146,9 @@ impl CronSchedule {
 
             if self.months.contains(&(dt.month() as u32))
                 && self.days.contains(&(dt.day() as u32))
-                && self.weekdays.contains(&(dt.weekday().num_days_from_sunday()))
+                && self
+                    .weekdays
+                    .contains(&(dt.weekday().num_days_from_sunday()))
                 && self.hours.contains(&(dt.hour() as u32))
                 && self.minutes.contains(&(dt.minute() as u32))
             {
@@ -217,7 +227,11 @@ fn uuid_like_id() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
-    format!("{:x}{:x}", now.as_nanos() % 0x10000, std::process::id() % 0x100)
+    format!(
+        "{:x}{:x}",
+        now.as_nanos() % 0x10000,
+        std::process::id() % 0x100
+    )
 }
 
 // ===== Tick（检查 + 运行到期任务）=====
@@ -308,8 +322,7 @@ fn run_cron_job(job: &CronJob) -> anyhow::Result<String> {
         let config = boxing_config::load(&config_path)?;
 
         let provider: Arc<dyn boxing_providers::Provider> = Arc::from(
-            boxing_providers::resolve(&config, &env_path)
-                .map_err(|e| anyhow::anyhow!("{e}"))?,
+            boxing_providers::resolve(&config, &env_path).map_err(|e| anyhow::anyhow!("{e}"))?,
         );
 
         let model = if job.model.is_empty() {
@@ -320,17 +333,9 @@ fn run_cron_job(job: &CronJob) -> anyhow::Result<String> {
             job.model.clone()
         };
 
-        let tools = crate::agent_tools(
-            provider.clone(),
-            &model,
-            "",
-            30,
-            4096,
-            &config,
-        );
+        let tools = crate::agent_tools(provider.clone(), &model, "", 30, 4096, &config);
 
-        let mut agent =
-            boxing_core::Agent::new(provider, model, String::new(), tools, 30, 4096);
+        let mut agent = boxing_core::Agent::new(provider, model, String::new(), tools, 30, 4096);
 
         let result = agent
             .run(&job.prompt, &mut |_| {}, &mut |_| {})

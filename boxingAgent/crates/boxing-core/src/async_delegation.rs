@@ -50,6 +50,12 @@ pub struct AsyncDelegationRegistry {
     rx: Arc<Mutex<mpsc::Receiver<CompletedDelegation>>>,
 }
 
+impl Default for AsyncDelegationRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AsyncDelegationRegistry {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(100);

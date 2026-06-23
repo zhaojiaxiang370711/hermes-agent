@@ -108,7 +108,9 @@ fn prompt_choice(question: &str, choices: &[String]) -> Result<String, ToolError
     io::stdout().flush().ok();
 
     let mut input = String::new();
-    io::stdin().read_line(&mut input).map_err(|e| ToolError::Other(format!("读取输入失败: {e}")))?;
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| ToolError::Other(format!("读取输入失败: {e}")))?;
     let input = input.trim();
 
     if input.is_empty() {
@@ -127,7 +129,9 @@ fn prompt_choice(question: &str, choices: &[String]) -> Result<String, ToolError
         print!("  请输入你的回答：");
         io::stdout().flush().ok();
         let mut custom = String::new();
-        io::stdin().read_line(&mut custom).map_err(|e| ToolError::Other(format!("读取输入失败: {e}")))?;
+        io::stdin()
+            .read_line(&mut custom)
+            .map_err(|e| ToolError::Other(format!("读取输入失败: {e}")))?;
         return Ok(custom.trim().to_string());
     }
 
@@ -142,7 +146,9 @@ fn prompt_open(question: &str) -> Result<String, ToolError> {
     io::stdout().flush().ok();
 
     let mut input = String::new();
-    io::stdin().read_line(&mut input).map_err(|e| ToolError::Other(format!("读取输入失败: {e}")))?;
+    io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| ToolError::Other(format!("读取输入失败: {e}")))?;
     Ok(input.trim().to_string())
 }
 

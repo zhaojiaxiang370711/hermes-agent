@@ -24,6 +24,7 @@ pub struct ConfigDoc {
 }
 
 impl ConfigDoc {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(text: &str) -> anyhow::Result<Self> {
         if text.trim().is_empty() {
             return Ok(Self::default());
@@ -32,6 +33,7 @@ impl ConfigDoc {
         Ok(Self { root })
     }
 
+    #[allow(clippy::inherent_to_string)]
     pub fn to_string(&self) -> String {
         if matches!(self.root, serde_yaml::Value::Null) {
             return String::new();

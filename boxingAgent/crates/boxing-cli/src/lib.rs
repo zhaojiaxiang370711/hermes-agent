@@ -297,7 +297,14 @@ async fn run_chat(
                 boxing_core::LoopEvent::MaxTurns => eprintln!("boxing-agent: 达到最大轮数"),
                 boxing_core::LoopEvent::Cancelled => eprintln!("boxing-agent: 已取消"),
                 boxing_core::LoopEvent::ToolApproval { tool, approved } => {
-                    eprintln!("{} {tool}", if approved { "✓(approved)" } else { "✗(denied)" });
+                    eprintln!(
+                        "{} {tool}",
+                        if approved {
+                            "✓(approved)"
+                        } else {
+                            "✗(denied)"
+                        }
+                    );
                 }
             },
         )
@@ -756,11 +763,23 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
             let jobs = cron::load_jobs();
             if jobs.is_empty() {
                 println!("  无定时任务。");
-                println!("  添加: boxing-agent cron add <name> --schedule '0 9 * * *' --prompt '...'");
+                println!(
+                    "  添加: boxing-agent cron add <name> --schedule '0 9 * * *' --prompt '...'"
+                );
             } else {
                 println!("\n  定时任务：\n");
-                println!("  {:<12} {:<14} {:<10} {:<20} {}", "ID", "名称", "状态", "下次运行", "Schedule");
-                println!("  {} {} {} {} {}", "─".repeat(12), "─".repeat(14), "─".repeat(10), "─".repeat(20), "─".repeat(14));
+                println!(
+                    "  {:<12} {:<14} {:<10} {:<20} {}",
+                    "ID", "名称", "状态", "下次运行", "Schedule"
+                );
+                println!(
+                    "  {} {} {} {} {}",
+                    "─".repeat(12),
+                    "─".repeat(14),
+                    "─".repeat(10),
+                    "─".repeat(20),
+                    "─".repeat(14)
+                );
                 for j in &jobs {
                     let next = if j.next_run_at > 0.0 {
                         let dt = chrono::DateTime::from_timestamp(j.next_run_at as i64, 0)
@@ -770,12 +789,20 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
                     } else {
                         "never".to_string()
                     };
-                    println!("  {:<12} {:<14} {:<10} {:<20} {}", j.id, j.name, j.status, next, j.schedule);
+                    println!(
+                        "  {:<12} {:<14} {:<10} {:<20} {}",
+                        j.id, j.name, j.status, next, j.schedule
+                    );
                 }
             }
             Ok(())
         }
-        CronAction::Add { name, schedule, prompt, model } => {
+        CronAction::Add {
+            name,
+            schedule,
+            prompt,
+            model,
+        } => {
             // 验证 cron 表达式
             use std::str::FromStr;
             let _cron: cron::CronSchedule = cron::CronSchedule::from_str(&schedule)
@@ -802,7 +829,9 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
         }
         CronAction::Pause { id_or_name } => {
             let mut jobs = cron::load_jobs();
-            let idx = jobs.iter().position(|j| j.id == id_or_name || j.name == id_or_name);
+            let idx = jobs
+                .iter()
+                .position(|j| j.id == id_or_name || j.name == id_or_name);
             if let Some(idx) = idx {
                 jobs[idx].status = "paused".to_string();
                 cron::save_jobs(&jobs)?;
@@ -814,7 +843,9 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
         }
         CronAction::Resume { id_or_name } => {
             let mut jobs = cron::load_jobs();
-            let idx = jobs.iter().position(|j| j.id == id_or_name || j.name == id_or_name);
+            let idx = jobs
+                .iter()
+                .position(|j| j.id == id_or_name || j.name == id_or_name);
             if let Some(idx) = idx {
                 jobs[idx].status = "active".to_string();
                 cron::save_jobs(&jobs)?;

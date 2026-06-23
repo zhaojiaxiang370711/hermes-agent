@@ -177,7 +177,10 @@ pub struct TokenStorage {
 impl TokenStorage {
     pub fn new(hermes_home: &Path, server_name: &str) -> Self {
         let dir = hermes_home.join("mcp-tokens");
-        let safe_name = server_name.replace('/', "_").replace('\\', "_");
+        let safe_name: String = server_name
+            .chars()
+            .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+            .collect();
         Self {
             tokens_path: dir.join(format!("{safe_name}.json")),
             client_path: dir.join(format!("{safe_name}.client.json")),
@@ -793,13 +796,10 @@ fn wait_for_callback(port: u16, expected_state: &str) -> Result<String, ToolErro
 /// 支持完整 URL (`http://127.0.0.1:8484/callback?code=xxx&state=yyy`)
 /// 或仅查询串 (`code=xxx&state=yyy`)。
 fn parse_callback_url(input: &str, expected_state: &str) -> Result<String, ToolError> {
-    // 提取 query 部分
-    let query = if input.contains('?') {
-        input.split('?').nth(1).unwrap_or("")
-    } else if input.contains("code=") || input.contains("state=") {
-        input // 已经是查询串
-    } else {
-        input // 尝试整体解析
+    // 提取 query 部分：如果有 ?，取 ? 之后的部分；否则直接用整体
+    let query = match input.find('?') {
+        Some(pos) => &input[pos + 1..],
+        None => input,
     };
 
     let mut code = None;

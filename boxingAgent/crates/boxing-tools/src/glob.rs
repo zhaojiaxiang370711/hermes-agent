@@ -43,7 +43,7 @@ impl Tool for Glob {
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
             entries.push((mtime, entry.to_string_lossy().into_owned()));
         }
-        entries.sort_by(|a, b| b.0.cmp(&a.0)); // mtime 倒序
+        entries.sort_by_key(|a| std::cmp::Reverse(a.0)); // mtime 倒序
         Ok(entries
             .iter()
             .map(|(_, p)| p.as_str())

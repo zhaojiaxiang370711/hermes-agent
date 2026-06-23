@@ -43,12 +43,20 @@ pub struct TurnOutput {
 /// loop 事件（供调用方 live 渲染）。
 #[derive(Debug, Clone)]
 pub enum LoopEvent {
-    ToolCall { name: String },
-    ToolResult { name: String, ok: bool },
+    ToolCall {
+        name: String,
+    },
+    ToolResult {
+        name: String,
+        ok: bool,
+    },
     MaxTurns,
     Cancelled,
     /// 工具审批请求（ACP edit approval，IDE 可拦截 write/edit/bash）。
-    ToolApproval { tool: String, approved: bool },
+    ToolApproval {
+        tool: String,
+        approved: bool,
+    },
 }
 
 /// Hermes 格式的工具调用持久化结构。
@@ -108,7 +116,8 @@ impl Agent {
         on_delta: &mut impl FnMut(&str),
         on_event: &mut impl FnMut(LoopEvent),
     ) -> anyhow::Result<String> {
-        self.run_with_cancel(user_message, on_delta, on_event, None).await
+        self.run_with_cancel(user_message, on_delta, on_event, None)
+            .await
     }
 
     /// 带 cancel flag 的 run（ACP 用）。

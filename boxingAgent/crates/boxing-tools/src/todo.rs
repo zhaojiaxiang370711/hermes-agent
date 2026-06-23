@@ -23,6 +23,12 @@ pub struct Todo {
     store: Mutex<Vec<TodoItem>>,
 }
 
+impl Default for Todo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Todo {
     pub fn new() -> Self {
         Self {

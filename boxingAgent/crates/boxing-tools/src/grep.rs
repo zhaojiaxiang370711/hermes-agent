@@ -83,8 +83,8 @@ impl Tool for Grep {
                             // 带上下文：输出 [i-context, i+context] 区间
                             let lo = i.saturating_sub(context);
                             let hi = (i + context + 1).min(lines.len());
-                            for j in lo..hi {
-                                out.push(format!("{rel}:{}:{}", j + 1, lines[j]));
+                            for (offset, line) in lines[lo..hi].iter().enumerate() {
+                                out.push(format!("{rel}:{}:{}", lo + offset + 1, line));
                             }
                         }
                         shown += 1;

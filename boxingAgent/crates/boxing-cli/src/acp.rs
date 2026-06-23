@@ -169,10 +169,7 @@ impl AcpServer {
     }
 
     fn handle_new_session(&self, params: &Value) -> Result<Value, (i32, String)> {
-        let cwd = params
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
 
         let model = params
             .get("model")
@@ -181,7 +178,8 @@ impl AcpServer {
 
         let session_id = format!(
             "boxing-{}",
-            self.next_session.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            self.next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         );
 
         let session = AcpSession {
@@ -196,7 +194,10 @@ impl AcpServer {
             config_options: HashMap::new(),
         };
 
-        self.sessions.lock().unwrap().insert(session_id.clone(), session);
+        self.sessions
+            .lock()
+            .unwrap()
+            .insert(session_id.clone(), session);
 
         Ok(json!({
             "sessionId": session_id,
@@ -217,10 +218,7 @@ impl AcpServer {
             .and_then(|v| v.as_str())
             .ok_or((-32602, "缺少 sessionId".to_string()))?;
 
-        let cwd = params
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
 
         // 1. 检查内存中的会话
         let found = {
@@ -251,7 +249,10 @@ impl AcpServer {
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 config_options: HashMap::new(),
             };
-            self.sessions.lock().unwrap().insert(session_id.to_string(), session);
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(session_id.to_string(), session);
         }
 
         // 3. 回放历史（best-effort，从 state.db 读取）
@@ -259,7 +260,9 @@ impl AcpServer {
 
         // 4. 返回会话信息
         let sessions = self.sessions.lock().unwrap();
-        let session = sessions.get(session_id).ok_or((-32602, "会话恢复失败".to_string()))?;
+        let session = sessions
+            .get(session_id)
+            .ok_or((-32602, "会话恢复失败".to_string()))?;
 
         Ok(json!({
             "models": [{"id": session.model, "name": session.model}],
@@ -274,10 +277,7 @@ impl AcpServer {
             .and_then(|v| v.as_str())
             .ok_or((-32602, "缺少 sessionId".to_string()))?;
 
-        let cwd = params
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
 
         // 检查内存
         let found = {
@@ -309,14 +309,19 @@ impl AcpServer {
                 cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 config_options: HashMap::new(),
             };
-            self.sessions.lock().unwrap().insert(session_id.to_string(), session);
+            self.sessions
+                .lock()
+                .unwrap()
+                .insert(session_id.to_string(), session);
         }
 
         // 回放历史
         let _ = self.replay_history(session_id);
 
         let sessions = self.sessions.lock().unwrap();
-        let session = sessions.get(session_id).ok_or((-32602, "会话恢复失败".to_string()))?;
+        let session = sessions
+            .get(session_id)
+            .ok_or((-32602, "会话恢复失败".to_string()))?;
 
         Ok(json!({
             "sessionId": session_id,
@@ -332,7 +337,10 @@ impl AcpServer {
             return Ok(None);
         }
         let summaries = boxing_state::SessionStore::open(&db_path)?.session_summaries()?;
-        Ok(summaries.into_iter().find(|s| s.id == session_id).and_then(|s| s.model))
+        Ok(summaries
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .and_then(|s| s.model))
     }
 
     /// 回放会话历史（从 state.db 读取消息，发送 session/update 通知）。
@@ -371,11 +379,7 @@ impl AcpServer {
                 _ => "🔧",
             };
             let preview: String = content.chars().take(200).collect();
-            Self::send_notification(
-                session_id,
-                "history",
-                &format!("{speaker} {preview}"),
-            );
+            Self::send_notification(session_id, "history", &format!("{speaker} {preview}"));
         }
 
         Ok(())
@@ -422,10 +426,10 @@ impl AcpServer {
         };
 
         // 解析 provider + 构建 agent
-        let config_path = boxing_config::config_path()
-            .map_err(|e| (-32603, format!("config 路径错误: {e}")))?;
-        let env_path = boxing_config::env_path()
-            .map_err(|e| (-32603, format!("env 路径错误: {e}")))?;
+        let config_path =
+            boxing_config::config_path().map_err(|e| (-32603, format!("config 路径错误: {e}")))?;
+        let env_path =
+            boxing_config::env_path().map_err(|e| (-32603, format!("env 路径错误: {e}")))?;
         let config = boxing_config::load(&config_path)
             .map_err(|e| (-32603, format!("加载配置失败: {e}")))?;
 
@@ -447,24 +451,33 @@ impl AcpServer {
 
         // 运行 agent loop（带 cancel flag，支持 ACP cancel 真实中断）
         let result = agent
-            .run_with_cancel(&prompt_text, &mut |delta| {
-                Self::send_notification(session_id, "agent_text_chunk", delta);
-            }, &mut |event| {
-                let (update_type, text) = match &event {
-                    boxing_core::LoopEvent::ToolCall { name } => ("tool_call", format!("→ {name}")),
-                    boxing_core::LoopEvent::ToolResult { name, ok } => {
-                        let mark = if *ok { "✓" } else { "✗" };
-                        ("tool_result", format!("{mark} {name}"))
-                    }
-                    boxing_core::LoopEvent::MaxTurns => ("max_turns", "达到最大轮数".to_string()),
-                    boxing_core::LoopEvent::Cancelled => ("cancelled", "已取消".to_string()),
-                    boxing_core::LoopEvent::ToolApproval { tool, approved } => {
-                        let mark = if *approved { "✓" } else { "✗" };
-                        ("tool_approval", format!("{mark} {tool}"))
-                    }
-                };
-                Self::send_notification(session_id, update_type, &text);
-            }, Some(Arc::clone(&cancel)))
+            .run_with_cancel(
+                &prompt_text,
+                &mut |delta| {
+                    Self::send_notification(session_id, "agent_text_chunk", delta);
+                },
+                &mut |event| {
+                    let (update_type, text) = match &event {
+                        boxing_core::LoopEvent::ToolCall { name } => {
+                            ("tool_call", format!("→ {name}"))
+                        }
+                        boxing_core::LoopEvent::ToolResult { name, ok } => {
+                            let mark = if *ok { "✓" } else { "✗" };
+                            ("tool_result", format!("{mark} {name}"))
+                        }
+                        boxing_core::LoopEvent::MaxTurns => {
+                            ("max_turns", "达到最大轮数".to_string())
+                        }
+                        boxing_core::LoopEvent::Cancelled => ("cancelled", "已取消".to_string()),
+                        boxing_core::LoopEvent::ToolApproval { tool, approved } => {
+                            let mark = if *approved { "✓" } else { "✗" };
+                            ("tool_approval", format!("{mark} {tool}"))
+                        }
+                    };
+                    Self::send_notification(session_id, update_type, &text);
+                },
+                Some(Arc::clone(&cancel)),
+            )
             .await;
 
         match result {
@@ -521,20 +534,20 @@ impl AcpServer {
             .and_then(|v| v.as_str())
             .ok_or((-32602, "缺少 sessionId".to_string()))?;
 
-        let cwd = params
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let cwd = params.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
 
         let new_id = format!(
             "boxing-{}",
-            self.next_session.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            self.next_session
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
         );
 
         // 从父会话克隆状态
         let parent = {
             let sessions = self.sessions.lock().unwrap();
-            sessions.get(parent_id).and_then(|s| s.cloned_for_fork(&new_id, cwd))
+            sessions
+                .get(parent_id)
+                .and_then(|s| s.cloned_for_fork(&new_id, cwd))
         };
 
         let parent = parent.ok_or((-32602, format!("会话不存在: {parent_id}")))?;
@@ -603,10 +616,7 @@ impl AcpServer {
             .and_then(|v| v.as_str())
             .ok_or((-32602, "缺少 configId".to_string()))?;
 
-        let value = params
-            .get("value")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let value = params.get("value").and_then(|v| v.as_str()).unwrap_or("");
 
         let mut sessions = self.sessions.lock().unwrap();
         let session = sessions
@@ -622,7 +632,9 @@ impl AcpServer {
             };
             session.mode = mode.to_string();
         } else {
-            session.config_options.insert(config_id.to_string(), value.to_string());
+            session
+                .config_options
+                .insert(config_id.to_string(), value.to_string());
         }
 
         Ok(json!({"configOptions": []}))
@@ -658,7 +670,11 @@ impl AcpServer {
         });
         let stdout = std::io::stdout();
         let mut out = stdout.lock();
-        let _ = writeln!(out, "{}", serde_json::to_string(&notification).unwrap_or_default());
+        let _ = writeln!(
+            out,
+            "{}",
+            serde_json::to_string(&notification).unwrap_or_default()
+        );
         let _ = out.flush();
     }
 }
