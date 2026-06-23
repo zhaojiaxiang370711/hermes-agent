@@ -1,5 +1,5 @@
 # Phase 0 catalog: boxingAgent 默认工具集。
-# 13 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
+# 14 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
 # 每个工具：name / params / return / side effects。实现以此为准。
 
 tools:
@@ -43,6 +43,10 @@ tools:
     params: [query, limit?]
     return: "JSON（success, data.web[{title, url, description, position}]）"
     side_effects: none
+  - name: execute_code
+    params: [code, timeout?, max_tool_calls?]
+    return: "JSON（stdout, stderr?, exit_code, tool_calls_made）"
+    side_effects: "通过 RPC 子进程执行 Python，可调用受限工具集"
   - name: todo
     params: [todos?, merge?]
     return: "完整任务列表（JSON）"

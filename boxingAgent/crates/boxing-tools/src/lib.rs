@@ -8,6 +8,7 @@ use serde_json::Value;
 
 pub mod bash;
 pub mod clarify;
+pub mod code_execution;
 pub mod edit;
 pub mod glob;
 pub mod grep;
@@ -24,6 +25,7 @@ pub mod write;
 
 pub use bash::Bash;
 pub use clarify::Clarify;
+pub use code_execution::ExecuteCode;
 pub use edit::Edit;
 pub use glob::Glob;
 pub use grep::Grep;
@@ -36,7 +38,7 @@ pub use vision::Vision;
 pub use web::WebSearch;
 pub use write::Write;
 
-/// 返回全部 13 个默认工具（Phase 2a + Phase 3 + vision + web_search）。
+/// 返回全部 14 个默认工具（Phase 2a + Phase 3 + vision + web_search + execute_code）。
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
     let home = hermes_home();
     vec![
@@ -50,6 +52,15 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(Clarify),
         Box::new(Vision),
         Box::new(WebSearch),
+        Box::new(ExecuteCode::new(vec![
+            "read_file".into(),
+            "write_file".into(),
+            "edit".into(),
+            "bash".into(),
+            "grep".into(),
+            "glob".into(),
+            "ls".into(),
+        ])),
         Box::new(Todo::new()),
         Box::new(Memory::new(&home)),
         Box::new(SessionSearch::new(home.join("state.db"))),
@@ -150,7 +161,7 @@ mod tests {
 mod catalog_tests {
     use super::*;
 
-    /// 实现的工具集必须恰好是 catalog 中的 13 个，名字一致。
+    /// 实现的工具集必须恰好是 catalog 中的 14 个，名字一致。
     #[test]
     fn default_tools_match_catalog() {
         const CATALOG: &str = include_str!("../../../specs/tools-phase2a.yaml");
@@ -167,6 +178,7 @@ mod catalog_tests {
             "clarify",
             "vision",
             "web_search",
+            "execute_code",
             "todo",
             "memory",
             "session_search",
