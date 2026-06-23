@@ -1,12 +1,13 @@
 //! boxingAgent 默认工具集（Phase 2a + Phase 3）。
 //!
-//! 定义统一的 [`Tool`] trait 与 [`ToolError`]，以及 10 个编码工具：
-//! read / write / edit / bash / grep / glob / ls / todo / memory / session_search。
+//! 定义统一的 [`Tool`] trait 与 [`ToolError`]，以及 11 个工具：
+//! read / write / edit / bash / grep / glob / ls / clarify / todo / memory / session_search。
 //! 每个工具一个模块，经 [`default_tools`] 一次性获取全部。
 
 use serde_json::Value;
 
 pub mod bash;
+pub mod clarify;
 pub mod edit;
 pub mod glob;
 pub mod grep;
@@ -20,6 +21,7 @@ pub mod todo;
 pub mod write;
 
 pub use bash::Bash;
+pub use clarify::Clarify;
 pub use edit::Edit;
 pub use glob::Glob;
 pub use grep::Grep;
@@ -30,7 +32,7 @@ pub use search::SessionSearch;
 pub use todo::Todo;
 pub use write::Write;
 
-/// 返回全部 10 个默认工具（Phase 2a + Phase 3 编码集）。
+/// 返回全部 11 个默认工具（Phase 2a + Phase 3 编码集 + clarify）。
 pub fn default_tools() -> Vec<Box<dyn Tool>> {
     let home = hermes_home();
     vec![
@@ -41,6 +43,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(Grep),
         Box::new(Glob),
         Box::new(Ls),
+        Box::new(Clarify),
         Box::new(Todo::new()),
         Box::new(Memory::new(&home)),
         Box::new(SessionSearch::new(home.join("state.db"))),
@@ -141,7 +144,7 @@ mod tests {
 mod catalog_tests {
     use super::*;
 
-    /// 实现的工具集必须恰好是 catalog 中的 10 个，名字一致。
+    /// 实现的工具集必须恰好是 catalog 中的 11 个，名字一致。
     #[test]
     fn default_tools_match_catalog() {
         const CATALOG: &str = include_str!("../../../specs/tools-phase2a.yaml");
@@ -155,6 +158,7 @@ mod catalog_tests {
             "grep",
             "glob",
             "ls",
+            "clarify",
             "todo",
             "memory",
             "session_search",

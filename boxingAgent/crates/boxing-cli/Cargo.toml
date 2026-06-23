@@ -11,6 +11,7 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
+chrono = "0.4"
 boxing-config.workspace = true
 boxing-providers.workspace = true
 boxing-core.workspace = true

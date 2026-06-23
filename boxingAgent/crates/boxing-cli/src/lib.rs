@@ -7,6 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub mod acp;
+pub mod cron;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -58,6 +59,11 @@ pub enum Command {
     },
     /// Start ACP (Agent Client Protocol) stdio server for IDE integration.
     Acp,
+    /// Cron job management.
+    Cron {
+        #[command(subcommand)]
+        action: CronAction,
+    },
     /// Model selection (Phase 1b).
     Model,
 }
@@ -131,6 +137,32 @@ pub enum ConfigAction {
     Set { key: String, value: String },
     /// List keys at a path (top level if omitted).
     List { key: Option<String> },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CronAction {
+    /// List all cron jobs.
+    List,
+    /// Add a new cron job.
+    Add {
+        /// Job name.
+        name: String,
+        /// Cron expression (e.g. "0 9 * * *", "*/5 * * * *").
+        schedule: String,
+        /// Prompt to send to the agent.
+        prompt: String,
+        /// Model override (optional).
+        #[arg(long)]
+        model: Option<String>,
+    },
+    /// Remove a cron job by ID or name.
+    Remove { id_or_name: String },
+    /// Pause a cron job.
+    Pause { id_or_name: String },
+    /// Resume a paused cron job.
+    Resume { id_or_name: String },
+    /// Run a single tick (check and execute due jobs).
+    Tick,
 }
 
 /// Minimal built-in system prompt (overridable via `--system`).
@@ -297,6 +329,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => run_config_at(&boxing_config::config_path()?, action),
         Some(Command::Mcp { action }) => run_mcp(action),
         Some(Command::Acp) => acp::run_acp_server().await,
+        Some(Command::Cron { action }) => run_cron(action),
     }
 }
 
@@ -714,6 +747,91 @@ fn run_mcp(action: McpAction) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// 处理 `boxing-agent cron` 子命令。
+fn run_cron(action: CronAction) -> anyhow::Result<()> {
+    match action {
+        CronAction::List => {
+            let jobs = cron::load_jobs();
+            if jobs.is_empty() {
+                println!("  无定时任务。");
+                println!("  添加: boxing-agent cron add <name> --schedule '0 9 * * *' --prompt '...'");
+            } else {
+                println!("\n  定时任务：\n");
+                println!("  {:<12} {:<14} {:<10} {:<20} {}", "ID", "名称", "状态", "下次运行", "Schedule");
+                println!("  {} {} {} {} {}", "─".repeat(12), "─".repeat(14), "─".repeat(10), "─".repeat(20), "─".repeat(14));
+                for j in &jobs {
+                    let next = if j.next_run_at > 0.0 {
+                        let dt = chrono::DateTime::from_timestamp(j.next_run_at as i64, 0)
+                            .map(|d| d.format("%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        dt
+                    } else {
+                        "never".to_string()
+                    };
+                    println!("  {:<12} {:<14} {:<10} {:<20} {}", j.id, j.name, j.status, next, j.schedule);
+                }
+            }
+            Ok(())
+        }
+        CronAction::Add { name, schedule, prompt, model } => {
+            // 验证 cron 表达式
+            use std::str::FromStr;
+            let _cron: cron::CronSchedule = cron::CronSchedule::from_str(&schedule)
+                .map_err(|e| anyhow::anyhow!("无效的 cron 表达式 '{schedule}': {e}"))?;
+
+            let job = cron::add_job(&name, &schedule, &prompt, model.as_deref().unwrap_or(""))?;
+            let mut jobs = cron::load_jobs();
+            let id = job.id.clone();
+            jobs.push(job);
+            cron::save_jobs(&jobs)?;
+            println!("  ✓ 已添加任务 '{name}'（id={id}，schedule={schedule}）");
+            Ok(())
+        }
+        CronAction::Remove { id_or_name } => {
+            let mut jobs = cron::load_jobs();
+            let before = jobs.len();
+            jobs.retain(|j| j.id != id_or_name && j.name != id_or_name);
+            if jobs.len() == before {
+                anyhow::bail!("未找到任务: {id_or_name}");
+            }
+            cron::save_jobs(&jobs)?;
+            println!("  ✓ 已删除任务 '{id_or_name}'");
+            Ok(())
+        }
+        CronAction::Pause { id_or_name } => {
+            let mut jobs = cron::load_jobs();
+            let idx = jobs.iter().position(|j| j.id == id_or_name || j.name == id_or_name);
+            if let Some(idx) = idx {
+                jobs[idx].status = "paused".to_string();
+                cron::save_jobs(&jobs)?;
+                println!("  ✓ 已暂停任务 '{}'", jobs[idx].name);
+            } else {
+                anyhow::bail!("未找到任务: {id_or_name}");
+            }
+            Ok(())
+        }
+        CronAction::Resume { id_or_name } => {
+            let mut jobs = cron::load_jobs();
+            let idx = jobs.iter().position(|j| j.id == id_or_name || j.name == id_or_name);
+            if let Some(idx) = idx {
+                jobs[idx].status = "active".to_string();
+                cron::save_jobs(&jobs)?;
+                println!("  ✓ 已恢复任务 '{}'", jobs[idx].name);
+            } else {
+                anyhow::bail!("未找到任务: {id_or_name}");
+            }
+            Ok(())
+        }
+        CronAction::Tick => {
+            let count = cron::tick(true);
+            if count == 0 {
+                println!("  cron: 无到期任务");
+            }
+            Ok(())
+        }
+    }
 }
 
 use std::io::Write as _;

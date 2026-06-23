@@ -1,5 +1,5 @@
-# Phase 0 catalog: boxingAgent 默认工具集（Phase 2a）。
-# 精简的 7 个编码工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
+# Phase 0 catalog: boxingAgent 默认工具集。
+# 11 个工具——不是 hermes ~50 工具 hermes-cli 的 1:1 移植。
 # 每个工具：name / params / return / side effects。实现以此为准。
 
 tools:
@@ -30,6 +30,10 @@ tools:
   - name: ls
     params: [path?, recursive?]
     return: "目录条目（目录后缀 /）"
+    side_effects: none
+  - name: clarify
+    params: [question, choices?]
+    return: "JSON（question, choices_offered, user_response）"
     side_effects: none
   - name: todo
     params: [todos?, merge?]
