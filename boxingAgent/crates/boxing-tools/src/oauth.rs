@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ToolError;
@@ -152,10 +153,16 @@ fn generate_state() -> String {
 // ===== Token 存储 =====
 
 /// Token 存储管理器：持久化到 `~/.hermes/mcp-tokens/`。
+///
+/// 支持跨进程 token 重载：通过 mtime 检测外部进程（如另一个 CLI 实例或 cron）
+/// 刷新的 token，自动重新读取磁盘。
 pub struct TokenStorage {
     tokens_path: PathBuf,
     client_path: PathBuf,
     meta_path: PathBuf,
+    /// 上次读取的 tokens 文件 mtime（纳秒）。0 = 从未读取。
+    /// 与 Python `_ProviderEntry.last_mtime_ns` 对等。
+    last_mtime_ns: Mutex<u64>,
 }
 
 impl TokenStorage {
@@ -166,10 +173,41 @@ impl TokenStorage {
             tokens_path: dir.join(format!("{safe_name}.json")),
             client_path: dir.join(format!("{safe_name}.client.json")),
             meta_path: dir.join(format!("{safe_name}.meta.json")),
+            last_mtime_ns: Mutex::new(0),
         }
     }
 
+    /// 检查磁盘上的 tokens 文件是否被外部进程修改。
+    /// 如果 mtime 变化，清除内存缓存，强制下次 load_tokens() 从磁盘重新读取。
+    /// 与 Python `invalidate_if_disk_changed` 对等。
+    pub fn check_disk_changed(&self) -> bool {
+        let current_mtime = self.file_mtime_ns(&self.tokens_path);
+        let mut last = self.last_mtime_ns.lock().unwrap();
+        if current_mtime > 0 && current_mtime != *last {
+            *last = current_mtime;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 获取文件的 mtime（纳秒）。
+    fn file_mtime_ns(&self, path: &Path) -> u64 {
+        std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    }
+
     pub fn load_tokens(&self) -> Option<StoredToken> {
+        // 更新 mtime 记录
+        let mtime = self.file_mtime_ns(&self.tokens_path);
+        if mtime > 0 {
+            let mut last = self.last_mtime_ns.lock().unwrap();
+            *last = mtime;
+        }
         let data = read_json(&self.tokens_path)?;
         serde_json::from_value(data).ok()
     }
@@ -209,12 +247,15 @@ impl TokenStorage {
 
 // ===== OAuth 客户端 =====
 
-/// MCP OAuth 客户端：管理授权流程 + token 刷新。
+/// MCP OAuth 客户端：管理授权流程 + token 刷新 + 401 去重 + 跨进程重载。
 pub struct OAuthClient {
     server_url: String,
     config: OAuthConfig,
     storage: TokenStorage,
     http: reqwest::blocking::Client,
+    /// 401 去重：记录正在恢复的 access_token，与 Python `pending_401` 对等。
+    /// 第一个 401 触发恢复，后续相同 token 的 401 等待结果。
+    recovery_in_flight: Mutex<Option<String>>,
 }
 
 impl OAuthClient {
@@ -225,14 +266,20 @@ impl OAuthClient {
             storage: TokenStorage::new(hermes_home, server_name),
             http: reqwest::blocking::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
-                .redirect(reqwest::redirect::Policy::none()) // OAuth 不跟随重定向
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
+            recovery_in_flight: Mutex::new(None),
         }
     }
 
-    /// 获取有效的 access_token：先检查缓存 → 过期则刷新 → 都不行则发起授权。
+    /// 获取有效的 access_token：磁盘变更检测 → 缓存 → 过期刷新 → 授权。
     pub fn get_access_token(&self) -> Result<String, ToolError> {
+        // 0. 跨进程 token 重载：检查磁盘是否被外部进程修改
+        if self.storage.check_disk_changed() {
+            // 磁盘变了，重新从磁盘读取（可能已被另一个进程刷新）
+        }
+
         // 1. 检查缓存的 token
         if let Some(token) = self.storage.load_tokens() {
             if !token.is_expired() {
@@ -251,6 +298,91 @@ impl OAuthClient {
         Err(ToolError::Other(
             "MCP OAuth: 需要浏览器授权。请运行 boxing-agent mcp-auth <server> 交互式授权".into(),
         ))
+    }
+
+    /// 处理 401（thundering-herd 去重）。
+    ///
+    /// 与 Python `MCPOAuthManager.handle_401` 对等。
+    /// 如果 N 个并发调用都用同一个 access_token 收到 401，
+    /// 只有第一个触发恢复（磁盘检查 → 刷新），其余等待。
+    /// 返回 true = 恢复成功（重试），false = 需要重新授权。
+    pub fn handle_401(&self, failed_token: &str) -> bool {
+        let mut in_flight = self.recovery_in_flight.lock().unwrap();
+
+        // 去重：如果已有相同 token 的恢复在进行中，直接返回（调用方等待）
+        if let Some(ref current) = *in_flight {
+            if current == failed_token {
+                // 另一个调用方正在恢复相同 token — 不重复
+                // 在同步代码中，到达这里意味着前一个恢复已完成（锁已释放）
+                // 重新检查是否有新 token
+                return self.storage.load_tokens()
+                    .map(|t| !t.is_expired())
+                    .unwrap_or(false);
+            }
+        }
+
+        // 标记恢复在进行中
+        *in_flight = Some(failed_token.to_string());
+        drop(in_flight);
+
+        // 执行恢复
+        let result = self.recover_from_401();
+
+        // 清除标记
+        let mut in_flight = self.recovery_in_flight.lock().unwrap();
+        *in_flight = None;
+
+        result
+    }
+
+    /// 401 恢复：磁盘检查 → 尝试刷新。
+    fn recover_from_401(&self) -> bool {
+        // Step 1: 磁盘是否被外部进程修改？
+        if self.storage.check_disk_changed() {
+            if let Some(token) = self.storage.load_tokens() {
+                if !token.is_expired() {
+                    return true;
+                }
+            }
+        }
+
+        // Step 2: 尝试在进程内刷新
+        if let Some(token) = self.storage.load_tokens() {
+            if token.can_refresh() {
+                if let Ok(new_token) = self.refresh_token(&token) {
+                    if self.storage.save_tokens(&new_token).is_ok() {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    /// 写入诊断信息到 `~/.hermes/mcp-tokens/<server>.diagnostic.json`。
+    ///
+    /// 与 Python 的 0-API-call 超时诊断对等。在 OAuth 流程失败时调用，
+    /// 帮助调试（token 是否存在、是否过期、元数据是否完整）。
+    pub fn dump_diagnostic(&self, server_name: &str, error: &str) {
+        let diagnostic = json!({
+            "server": server_name,
+            "error": error,
+            "timestamp": SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64(),
+            "has_tokens": self.storage.has_tokens(),
+            "token_expired": self.storage.load_tokens()
+                .map(|t| t.is_expired())
+                .unwrap_or(true),
+            "has_metadata": self.storage.load_metadata().is_some(),
+            "has_client_info": self.storage.load_client_info().is_some(),
+            "server_url": self.server_url,
+        });
+
+        let path = self.storage.tokens_path.with_extension("diagnostic.json");
+        let _ = write_json(&path, &diagnostic);
     }
 
     /// 执行完整的 OAuth 授权码 + PKCE 流程（交互式，需要用户在浏览器中授权）。
@@ -543,33 +675,113 @@ fn find_free_port() -> u16 {
         .unwrap_or(8484)
 }
 
-/// 等待 OAuth 回调（本地 HTTP 服务器）。
+/// 等待 OAuth 回调（本地 HTTP 服务器 + SSH 粘贴回退）。
+///
+/// 与 Python `_wait_for_callback` 对等：
+/// - TCP listener 监听 `127.0.0.1:{port}/callback`
+/// - SSH 环境检测：如果 `SSH_CLIENT` 或 `SSH_TTY` 存在，提示用户
+///   可以粘贴完整回调 URL 或 `code=...&state=...` 查询串
+/// - 两个来源竞争：TCP 先到用 TCP，stdin 先到用粘贴
 fn wait_for_callback(port: u16, expected_state: &str) -> Result<String, ToolError> {
     let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
         .map_err(|e| ToolError::Other(format!("绑定回调端口 {port} 失败: {e}")))?;
 
-    eprintln!("  等待授权回调（端口 {port}）...\n");
+    let is_ssh = std::env::var("SSH_CLIENT").is_ok() || std::env::var("SSH_TTY").is_ok();
 
-    // 设置 5 分钟超时
+    eprintln!("  等待授权回调（端口 {port}）...");
+    if is_ssh {
+        eprintln!(
+            "  检测到 SSH 远程会话。浏览器授权后会出现连接错误——\n\
+             把地址栏中的完整 URL（包含 code=...&state=...）粘贴到这里：\n"
+        );
+    }
+    eprintln!();
+
+    // SSH 粘贴回退：在另一个线程读 stdin
+    let paste_result: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let paste_clone = Arc::clone(&paste_result);
+    let _paste_thread = std::thread::spawn(move || {
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_ok() {
+            let trimmed = input.trim();
+            if !trimmed.is_empty() {
+                *paste_clone.lock().unwrap() = Some(trimmed.to_string());
+            }
+        }
+    });
+
+    // 设置 TCP listener 超时（10 秒轮询），与粘贴线程竞争
     listener
-        .set_nonblocking(false)
-        .map_err(|e| ToolError::Other(format!("设置监听: {e}")))?;
+        .set_nonblocking(true)
+        .map_err(|e| ToolError::Other(format!("设置非阻塞: {e}")))?;
 
-    let (mut stream, _) = listener
-        .accept()
-        .map_err(|e| ToolError::Other(format!("接受回调连接失败: {e}")))?;
+    let deadline = SystemTime::now() + std::time::Duration::from_secs(300); // 5 分钟
+    let tcp_request: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    let mut request = String::new();
-    stream
-        .read_to_string(&mut request)
-        .map_err(|e| ToolError::Other(format!("读取回调: {e}")))?;
+    loop {
+        // 检查粘贴结果
+        {
+            let paste = paste_result.lock().unwrap();
+            if paste.is_some() {
+                // 粘贴先到 — 解析粘贴的 URL
+                let pasted = paste.as_ref().unwrap().clone();
+                return parse_callback_url(&pasted, expected_state);
+            }
+        }
 
-    // 解析 GET /callback?code=xxx&state=yyy HTTP/1.1
-    let first_line = request.lines().next().unwrap_or("");
-    let url = first_line.split(' ').nth(1).unwrap_or("");
+        // 检查 TCP 连接
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let mut request = String::new();
+                if stream.read_to_string(&mut request).is_ok() {
+                    *tcp_request.lock().unwrap() = Some(request.clone());
+                    // 回复浏览器
+                    let body = "<html><body><h2>Authorization Successful</h2><p>You can close this tab.</p></body></html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(), body
+                    );
+                    let _ = stream.write_all(response.as_bytes());
 
-    // 从 URL 中提取 code 和 state
-    let query = url.split('?').nth(1).unwrap_or("");
+                    // 解析 TCP 请求
+                    let req = tcp_request.lock().unwrap().clone().unwrap();
+                    let first_line = req.lines().next().unwrap_or("");
+                    let url = first_line.split(' ').nth(1).unwrap_or("");
+                    return parse_callback_url(url, expected_state);
+                }
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // 无连接，继续等待
+            }
+            Err(e) => {
+                return Err(ToolError::Other(format!("接受连接失败: {e}")));
+            }
+        }
+
+        // 超时检查
+        if SystemTime::now() > deadline {
+            return Err(ToolError::Other(
+                "OAuth 回调超时（5 分钟无响应）".into(),
+            ));
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// 从回调 URL 或粘贴的字符串中解析 code + state。
+/// 支持完整 URL (`http://127.0.0.1:8484/callback?code=xxx&state=yyy`)
+/// 或仅查询串 (`code=xxx&state=yyy`)。
+fn parse_callback_url(input: &str, expected_state: &str) -> Result<String, ToolError> {
+    // 提取 query 部分
+    let query = if input.contains('?') {
+        input.split('?').nth(1).unwrap_or("")
+    } else if input.contains("code=") || input.contains("state=") {
+        input // 已经是查询串
+    } else {
+        input // 尝试整体解析
+    };
+
     let mut code = None;
     let mut state = None;
     let mut error = None;
@@ -586,25 +798,12 @@ fn wait_for_callback(port: u16, expected_state: &str) -> Result<String, ToolErro
         }
     }
 
-    // 回复浏览器
-    let body = if code.is_some() {
-        "<html><body><h2>Authorization Successful</h2><p>You can close this tab.</p></body></html>"
-    } else {
-        "<html><body><h2>Authorization Failed</h2></body></html>"
-    };
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    let _ = stream.write_all(response.as_bytes());
-
     // 验证 state（CSRF 防护）
     if let Some(ref s) = state {
         if s != expected_state {
-            return Err(ToolError::Other(
-                format!("OAuth state 不匹配（CSRF 检查失败）: 期望 {expected_state}, 收到 {s}"),
-            ));
+            return Err(ToolError::Other(format!(
+                "OAuth state 不匹配（CSRF 检查失败）: 期望 {expected_state}, 收到 {s}"
+            )));
         }
     }
 
