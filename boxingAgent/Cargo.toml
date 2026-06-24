@@ -24,6 +24,7 @@ anyhow = "1"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "io-util"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
 regex = "1"
 ignore = "0.4"
 glob = "0.3"

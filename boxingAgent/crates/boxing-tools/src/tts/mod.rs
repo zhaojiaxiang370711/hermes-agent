@@ -234,7 +234,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_volcano_arm_reaches_stub() {
+    async fn dispatch_volcano_arm_reports_missing_creds() {
+        // provider=volcano 但无 .env 凭证：dispatch 应到达真实 volcano 客户端并报缺凭证
         let home = tmp_home("dispatch");
         write_config(&home, "tts:\n  provider: volcano\n  voice: v1\n");
         let tool = TextToSpeech::new(home);
@@ -243,7 +244,7 @@ mod tests {
             .await;
         assert!(out.is_err());
         let msg = out.unwrap_err().to_string();
-        assert!(msg.contains("尚未实现"), "expected stub error, got: {msg}");
+        assert!(msg.contains("未配置"), "expected missing-creds error, got: {msg}");
     }
 
     #[test]
