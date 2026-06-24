@@ -149,7 +149,14 @@ impl Tool for TextToSpeech {
         let cfg = TtsConfig::load(&self.home)?;
         let out = match args.get("output_path").and_then(|v| v.as_str()) {
             Some(p) => PathBuf::from(p),
-            None => default_output_path(&self.home),
+            None => {
+                // 扩展名与 provider 的输出格式一致（edge 恒 mp3；volcano 取 encoding）
+                let ext = match cfg.provider {
+                    TtsProvider::Edge => "mp3".to_string(),
+                    TtsProvider::Volcano => cfg.volcano.encoding.clone(),
+                };
+                default_output_path(&self.home, &ext)
+            }
         };
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)?;
@@ -176,13 +183,13 @@ impl Tool for TextToSpeech {
     }
 }
 
-/// 默认输出路径：`<home>/audio_cache/<timestamp>.mp3`。
-fn default_output_path(home: &Path) -> PathBuf {
+/// 默认输出路径：`<home>/audio_cache/<timestamp>.<ext>`（ext 与 provider 格式一致）。
+fn default_output_path(home: &Path, ext: &str) -> PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    home.join("audio_cache").join(format!("{ts}.mp3"))
+    home.join("audio_cache").join(format!("{ts}.{ext}"))
 }
 
 #[cfg(test)]
@@ -266,9 +273,16 @@ mod tests {
     #[test]
     fn default_output_path_is_mp3_under_home() {
         let home = tmp_home("outpath");
-        let p = default_output_path(&home);
+        let p = default_output_path(&home, "mp3");
         assert!(p.starts_with(&home));
         assert_eq!(p.extension().unwrap(), "mp3");
+    }
+
+    #[test]
+    fn default_output_path_honors_volcano_encoding() {
+        let home = tmp_home("outpathwav");
+        let p = default_output_path(&home, "wav");
+        assert_eq!(p.extension().unwrap(), "wav");
     }
 
     /// Live smoke：真实 edge-tts（需联网 + 已安装 edge-tts）。
