@@ -5,6 +5,8 @@
 //! - 输出保存到 ~/.hermes/audio_cache/
 //! - 返回 MEDIA: 路径标签
 
+pub mod proto;
+
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
