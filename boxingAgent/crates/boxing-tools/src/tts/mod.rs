@@ -70,7 +70,11 @@ impl TtsConfig {
             Some("volcano") => TtsProvider::Volcano,
             _ => TtsProvider::Edge, // 默认 + 未知名都走 edge
         };
-        let voice = get_opt(&doc, "tts.voice");
+        // 音色按 provider 读取（对等 Python `tts.<provider>.voice` 约定）
+        let voice = match provider {
+            TtsProvider::Edge => get_opt(&doc, "tts.edge.voice"),
+            TtsProvider::Volcano => get_opt(&doc, "tts.volcano.voice"),
+        };
         let volcano = VolcanoCfg {
             api_key_env: get_opt(&doc, "tts.volcano.api_key_env")
                 .unwrap_or_else(|| "VOLC_TTS_API_KEY".into()),
@@ -169,7 +173,7 @@ impl Tool for TextToSpeech {
             }
             TtsProvider::Volcano => {
                 let voice = cfg.voice.clone().ok_or_else(|| {
-                    ToolError::Other("火山 TTS 需在 config 设置 tts.voice (voice_type)".into())
+                    ToolError::Other("火山 TTS 需在 config 设置 tts.volcano.voice (voice_type)".into())
                 })?;
                 volcano::generate(text, &out, &cfg.volcano, &voice, &env_path).await?;
             }
@@ -225,15 +229,24 @@ mod tests {
     }
 
     #[test]
+    fn edge_voice_from_tts_edge_voice() {
+        let home = tmp_home("edgevoice");
+        write_config(&home, "tts:\n  provider: edge\n  edge:\n    voice: en-US-GuyNeural\n");
+        let cfg = TtsConfig::load(&home).unwrap();
+        assert!(matches!(cfg.provider, TtsProvider::Edge));
+        assert_eq!(cfg.voice_or_edge_default(), "en-US-GuyNeural");
+    }
+
+    #[test]
     fn parses_volcano_provider() {
         let home = tmp_home("volcano");
         write_config(
             &home,
-            "tts:\n  provider: volcano\n  voice: zh_female_test\n  volcano:\n    encoding: wav\n    sample_rate: 16000\n",
+            "tts:\n  provider: volcano\n  volcano:\n    voice: zh_female_test\n    encoding: wav\n    sample_rate: 16000\n",
         );
         let cfg = TtsConfig::load(&home).unwrap();
         assert!(matches!(cfg.provider, TtsProvider::Volcano));
-        assert_eq!(cfg.voice.as_deref(), Some("zh_female_test"));
+        assert_eq!(cfg.voice.as_deref(), Some("zh_female_test")); // 来自 tts.volcano.voice
         assert_eq!(cfg.volcano.encoding, "wav");
         assert_eq!(cfg.volcano.sample_rate, 16000);
         assert_eq!(cfg.volcano.api_key_env, "VOLC_TTS_API_KEY"); // default
@@ -245,7 +258,7 @@ mod tests {
     async fn dispatch_volcano_arm_reports_missing_creds() {
         // provider=volcano 但无 .env 凭证：dispatch 应到达真实 volcano 客户端并报缺凭证
         let home = tmp_home("dispatch");
-        write_config(&home, "tts:\n  provider: volcano\n  voice: v1\n");
+        write_config(&home, "tts:\n  provider: volcano\n  volcano:\n    voice: v1\n");
         let tool = TextToSpeech::new(home);
         let out = tool
             .exec(json!({"text": "hi", "output_path": tmp_home("dispatchout").join("o.mp3").to_string_lossy()}))
