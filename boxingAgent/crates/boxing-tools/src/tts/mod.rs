@@ -18,9 +18,11 @@ use serde_json::{json, Value};
 
 use crate::{Tool, ToolError};
 
-/// 默认火山 WS 端点（单向流式）。
+/// 默认火山 WS 端点（豆包 seed-tts-2.0 单向流式）。
 pub const DEFAULT_VOLCANO_ENDPOINT: &str =
-    "wss://openspeech.bytedance.com/api/v3/tts/unidirectional/stream";
+    "wss://openspeech.bytedance.com/api/v3/plan/tts/unidirectional/stream";
+/// 默认 resource_id（豆包语音合成模型 2.0）。
+pub const DEFAULT_VOLCANO_RESOURCE_ID: &str = "seed-tts-2.0";
 
 /// `text_to_speech` 工具。持有 hermes home 以读取 config.yaml / .env。
 pub struct TextToSpeech {
@@ -43,9 +45,8 @@ pub enum TtsProvider {
 /// 火山 provider 配置（对等 config 的 `tts.volcano.*`）。
 #[derive(Debug, Clone)]
 pub struct VolcanoCfg {
-    pub appid_env: String,
-    pub token_env: String,
-    pub resource_id: String, // "" -> 按 voice 前缀推导
+    pub api_key_env: String, // Ark API key 的 env 变量名（默认 VOLC_TTS_API_KEY）
+    pub resource_id: String, // 默认 seed-tts-2.0
     pub encoding: String,
     pub sample_rate: u32,
     pub endpoint: String,
@@ -71,11 +72,10 @@ impl TtsConfig {
         };
         let voice = get_opt(&doc, "tts.voice");
         let volcano = VolcanoCfg {
-            appid_env: get_opt(&doc, "tts.volcano.appid_env")
-                .unwrap_or_else(|| "VOLC_TTS_APPID".into()),
-            token_env: get_opt(&doc, "tts.volcano.token_env")
-                .unwrap_or_else(|| "VOLC_TTS_TOKEN".into()),
-            resource_id: get_opt(&doc, "tts.volcano.resource_id").unwrap_or_default(),
+            api_key_env: get_opt(&doc, "tts.volcano.api_key_env")
+                .unwrap_or_else(|| "VOLC_TTS_API_KEY".into()),
+            resource_id: get_opt(&doc, "tts.volcano.resource_id")
+                .unwrap_or_else(|| DEFAULT_VOLCANO_RESOURCE_ID.into()),
             encoding: get_opt(&doc, "tts.volcano.encoding").unwrap_or_else(|| "mp3".into()),
             sample_rate: get_opt(&doc, "tts.volcano.sample_rate")
                 .and_then(|s| s.parse().ok())
@@ -236,7 +236,8 @@ mod tests {
         assert_eq!(cfg.voice.as_deref(), Some("zh_female_test"));
         assert_eq!(cfg.volcano.encoding, "wav");
         assert_eq!(cfg.volcano.sample_rate, 16000);
-        assert_eq!(cfg.volcano.appid_env, "VOLC_TTS_APPID"); // default
+        assert_eq!(cfg.volcano.api_key_env, "VOLC_TTS_API_KEY"); // default
+        assert_eq!(cfg.volcano.resource_id, "seed-tts-2.0"); // default
         assert_eq!(cfg.volcano.endpoint, DEFAULT_VOLCANO_ENDPOINT);
     }
 

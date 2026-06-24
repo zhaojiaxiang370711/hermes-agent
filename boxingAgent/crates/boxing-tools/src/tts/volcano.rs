@@ -1,8 +1,8 @@
-//! 火山（豆包）TTS provider — WebSocket 单向流式（对等 demo）。
+//! 火山（豆包）语音合成模型 2.0（doubao-seed-tts-2.0）provider — WebSocket 单向流式。
 //!
-//! 流程对等 demo `examples/volcengine/unidirectional_stream.py`：解析凭证 ->
-//! 推导 resource_id -> 连 WS（X-Api-* 头）-> 发一帧 FullClientRequest ->
-//! 收帧累积音频直到 SessionFinished -> 写文件。二进制帧编解码见 proto.rs。
+//! 对等官方 demo：`X-Api-Key`（Ark API key）+ `X-Api-Resource-Id`(seed-tts-2.0) 鉴权，
+//! `wss://.../api/v3/plan/tts/unidirectional/stream` 端点，发一帧 FullClientRequest，
+//! 收帧拼音频直到 SessionFinished。二进制帧编解码见 proto.rs（与 demo protocols.py 同一套）。
 
 use std::path::Path;
 
@@ -13,42 +13,26 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
 
 use super::proto::{marshal_request, unmarshal, Frame};
 use super::VolcanoCfg;
 use crate::ToolError;
 
-/// 按 voice 前缀推导 resource_id（对等 demo `get_resource_id`）。
-fn derive_resource_id(voice: &str, override_: &str) -> String {
-    if !override_.is_empty() {
-        return override_.into();
-    }
-    if voice.starts_with("S_") {
-        "volc.megatts.default".into()
-    } else {
-        "volc.service_type.10029".into()
-    }
-}
-
-/// 构造请求 JSON（对等 demo `request`）。
+/// 构造请求 JSON（对等官方 demo `body`：仅 `req_params`，无 user/additions）。
 fn build_request(text: &str, voice: &str, cfg: &VolcanoCfg) -> Value {
     json!({
-        "user": { "uid": Uuid::new_v4().to_string() },
         "req_params": {
             "speaker": voice,
+            "text": text,
             "audio_params": {
                 "format": cfg.encoding,
                 "sample_rate": cfg.sample_rate,
-                "enable_timestamp": true,
-            },
-            "text": text,
-            "additions": "{\"disable_markdown_filter\":false}",
+            }
         }
     })
 }
 
-/// 用火山 WS 单向流式合成 `text` 到 `out`。
+/// 用火山 seed-tts-2.0 WS 单向流式合成 `text` 到 `out`。
 pub async fn generate(
     text: &str,
     out: &Path,
@@ -56,27 +40,18 @@ pub async fn generate(
     voice: &str,
     env_path: &Path,
 ) -> Result<(), ToolError> {
-    let appid = env_value(env_path, &cfg.appid_env).ok_or_else(|| {
+    let api_key = env_value(env_path, &cfg.api_key_env).ok_or_else(|| {
         ToolError::Other(format!(
-            "火山 TTS 未配置 appid：在 {} 设置 {}",
+            "火山 TTS 未配置 API key：在 {} 设置 {}",
             env_path.display(),
-            cfg.appid_env
+            cfg.api_key_env
         ))
     })?;
-    let token = env_value(env_path, &cfg.token_env).ok_or_else(|| {
-        ToolError::Other(format!(
-            "火山 TTS 未配置 token：在 {} 设置 {}",
-            env_path.display(),
-            cfg.token_env
-        ))
-    })?;
-    let resource_id = derive_resource_id(voice, &cfg.resource_id);
-    let connect_id = Uuid::new_v4().to_string();
     let request = build_request(text, voice, cfg);
     let payload = serde_json::to_vec(&request)
         .map_err(|e| ToolError::Other(format!("序列化请求失败: {e}")))?;
 
-    // 带 X-Api-* 握手头
+    // 鉴权头：X-Api-Key（Ark key）+ X-Api-Resource-Id + 用量回传控制
     let mut req = cfg
         .endpoint
         .as_str()
@@ -84,18 +59,20 @@ pub async fn generate(
         .map_err(|e| ToolError::Other(format!("构造 WS 请求失败: {e}")))?;
     {
         let h = req.headers_mut();
-        for (k, v) in [
-            ("X-Api-App-Key", appid.as_str()),
-            ("X-Api-Access-Key", token.as_str()),
-            ("X-Api-Resource-Id", resource_id.as_str()),
-            ("X-Api-Connect-Id", connect_id.as_str()),
-        ] {
-            h.insert(
-                k.parse::<HeaderName>().unwrap(),
-                HeaderValue::from_str(v)
-                    .map_err(|_| ToolError::Other(format!("非法 header 值: {k}")))?,
-            );
-        }
+        h.insert(
+            HeaderName::from_static("x-api-key"),
+            HeaderValue::from_str(&api_key)
+                .map_err(|_| ToolError::Other("非法 API key".into()))?,
+        );
+        h.insert(
+            HeaderName::from_static("x-api-resource-id"),
+            HeaderValue::from_str(&cfg.resource_id)
+                .map_err(|_| ToolError::Other("非法 resource_id".into()))?,
+        );
+        h.insert(
+            HeaderName::from_static("x-control-require-usage-tokens-return"),
+            HeaderValue::from_static("*"),
+        );
     }
 
     let (mut ws, _resp) = connect_async(req)
@@ -137,11 +114,10 @@ pub async fn generate(
 mod tests {
     use super::*;
 
-    fn cfg(resource_id: &str) -> VolcanoCfg {
+    fn cfg() -> VolcanoCfg {
         VolcanoCfg {
-            appid_env: "VOLC_TTS_APPID".into(),
-            token_env: "VOLC_TTS_TOKEN".into(),
-            resource_id: resource_id.into(),
+            api_key_env: "VOLC_TTS_API_KEY".into(),
+            resource_id: super::super::DEFAULT_VOLCANO_RESOURCE_ID.into(),
             encoding: "mp3".into(),
             sample_rate: 24000,
             endpoint: super::super::DEFAULT_VOLCANO_ENDPOINT.into(),
@@ -149,48 +125,25 @@ mod tests {
     }
 
     #[test]
-    fn resource_id_default_for_doubao_voice() {
-        assert_eq!(
-            derive_resource_id("zh_female_xxx", ""),
-            "volc.service_type.10029"
-        );
-    }
-
-    #[test]
-    fn resource_id_mega_for_s_prefix() {
-        assert_eq!(derive_resource_id("S_abc", ""), "volc.megatts.default");
-    }
-
-    #[test]
-    fn resource_id_override_wins() {
-        assert_eq!(
-            derive_resource_id("zh_female_xxx", "volc.custom"),
-            "volc.custom"
-        );
-        assert_eq!(derive_resource_id("S_abc", "volc.custom"), "volc.custom");
-    }
-
-    #[test]
-    fn request_shape_matches_demo() {
-        let c = cfg("");
-        let r = build_request("你好", "zh_female_t", &c);
+    fn request_shape_matches_seed_tts_demo() {
+        let r = build_request("你好", "zh_female_t", &cfg());
         assert_eq!(r["req_params"]["speaker"], "zh_female_t");
         assert_eq!(r["req_params"]["text"], "你好");
         assert_eq!(r["req_params"]["audio_params"]["format"], "mp3");
         assert_eq!(r["req_params"]["audio_params"]["sample_rate"], 24000);
-        assert_eq!(r["req_params"]["audio_params"]["enable_timestamp"], true);
-        assert_eq!(
-            r["req_params"]["additions"],
-            "{\"disable_markdown_filter\":false}"
-        );
-        assert!(r["user"]["uid"].is_string());
+        // seed-tts-2.0 scheme：无 user / additions / enable_timestamp
+        assert!(r.get("user").is_none());
+        assert!(r["req_params"].get("additions").is_none());
+        assert!(r["req_params"]["audio_params"]
+            .get("enable_timestamp")
+            .is_none());
     }
 
-    /// Live smoke：真实火山 WS（需 ~/.hermes/.env 的 VOLC_TTS_APPID/TOKEN + config 的 tts.voice）。
+    /// Live smoke：真实火山 seed-tts-2.0 WS（需 ~/.hermes/.env 的 VOLC_TTS_API_KEY + config 的 tts.voice）。
     /// 设环境变量 VOLC_TTS_HOME 指向一个准备好 config.yaml/.env 的 hermes home，
     /// 然后 `cargo test live_volcano_tts_smoke -- --ignored --nocapture`。
     #[tokio::test]
-    #[ignore = "live smoke: 需真实火山凭证（VOLC_TTS_APPID/TOKEN）+ tts.voice"]
+    #[ignore = "live smoke: 需真实火山 Ark API key（VOLC_TTS_API_KEY）+ tts.voice"]
     async fn live_volcano_tts_smoke() {
         let home = std::path::PathBuf::from(std::env::var("VOLC_TTS_HOME").expect(
             "set VOLC_TTS_HOME to a hermes home with config.yaml + .env",
