@@ -35,7 +35,7 @@ impl VoiceConfig {
         let app_dir = resolve_app_dir();
         let kws_model_dir = env_path(
             "QXZN_VOICE_RUNTIME_KWS_MODEL_DIR",
-            app_dir.join("services/ai_agent/models/kws/sherpa-onnx-kws-zformformer-wenetspeech-3.3M-2024-01-01"),
+            app_dir.join("services/ai_agent/models/kws/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01"),
         );
         let kws_keywords_file = env_path(
             "QXZN_VOICE_RUNTIME_KWS_KEYWORDS",

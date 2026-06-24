@@ -21,6 +21,10 @@ boxing-voice = { workspace = true, features = ["server"] }
 rusqlite.workspace = true
 tokio.workspace = true
 
+[features]
+default = []
+voice-full = ["boxing-voice/full"]
+
 [[bin]]
 name = "boxing-agent"
 path = "src/main.rs"

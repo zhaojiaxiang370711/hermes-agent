@@ -14,6 +14,8 @@ pub enum VoicePhase {
     WakeDetected,
     Capturing,
     Transcribing,
+    Responding,
+    Speaking,
     Completed,
 }
 
@@ -25,6 +27,8 @@ impl VoicePhase {
             Self::WakeDetected => "wake_detected",
             Self::Capturing => "capturing",
             Self::Transcribing => "transcribing",
+            Self::Responding => "responding",
+            Self::Speaking => "speaking",
             Self::Completed => "completed",
         }
     }
@@ -41,6 +45,9 @@ pub struct VoiceEvent {
     pub state: String,
     pub keyword: Option<String>,
     pub transcript: Option<String>,
+    pub assistant_text: Option<String>,
+    pub media: Option<String>,
+    pub file_path: Option<String>,
     pub confidence: Option<f32>,
     pub final_result: bool,
     pub message: Option<String>,
@@ -188,6 +195,9 @@ pub fn make_event(
         state: phase.as_str().to_string(),
         keyword: None,
         transcript: None,
+        assistant_text: None,
+        media: None,
+        file_path: None,
         confidence: None,
         final_result: false,
         message: None,

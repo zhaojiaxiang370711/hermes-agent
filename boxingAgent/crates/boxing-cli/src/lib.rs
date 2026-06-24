@@ -3,7 +3,9 @@
 //! 命令：chat / config / mcp / acp / model
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 
 pub mod acp;
@@ -234,6 +236,7 @@ fn agent_tools(
 /// Resolve the configured provider, build an Agent, stream one turn to stdout.
 async fn run_chat(
     model: Option<String>,
+    provider_override: Option<String>,
     system: Option<String>,
     prompt: Vec<String>,
     max_tokens: u32,
@@ -248,9 +251,11 @@ async fn run_chat(
     let env_path = boxing_config::env_path()?;
     let config = boxing_config::load(&config_path)?;
 
-    let provider = Arc::from(
-        boxing_providers::resolve(&config, &env_path).map_err(|e| anyhow::anyhow!("{e}"))?,
-    );
+    let provider = Arc::from(resolve_provider(
+        &config,
+        &env_path,
+        provider_override.as_deref(),
+    )?);
 
     let model = match model {
         Some(m) => m,
@@ -320,16 +325,16 @@ async fn run_chat(
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     let Cli {
         model,
+        provider,
         system,
         max_tokens,
         max_turns,
         command,
-        ..
     } = cli;
     match command {
-        None => run_chat(model, system, Vec::new(), max_tokens, max_turns).await,
+        None => run_chat(model, provider, system, Vec::new(), max_tokens, max_turns).await,
         Some(Command::Chat { prompt }) => {
-            run_chat(model, system, prompt, max_tokens, max_turns).await
+            run_chat(model, provider, system, prompt, max_tokens, max_turns).await
         }
         Some(Command::Model) => {
             eprintln!("boxing-agent: model selection is implemented in a later phase.");
@@ -338,7 +343,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Command::Config { action }) => run_config_at(&boxing_config::config_path()?, action),
         Some(Command::Mcp { action }) => run_mcp(action),
         Some(Command::Acp) => acp::run_acp_server().await,
-        Some(Command::Voice) => run_voice().await,
+        Some(Command::Voice) => run_voice(model, provider, system, max_tokens, max_turns).await,
         Some(Command::Cron { action }) => run_cron(action),
     }
 }
@@ -868,17 +873,191 @@ fn run_cron(action: CronAction) -> anyhow::Result<()> {
     }
 }
 
+fn resolve_provider(
+    config: &boxing_config::ConfigDoc,
+    env_path: &Path,
+    provider_override: Option<&str>,
+) -> anyhow::Result<Box<dyn boxing_providers::Provider>> {
+    let mut config = config.clone();
+    if let Some(provider) = provider_override {
+        config
+            .set("model.provider", provider)
+            .map_err(|e| anyhow::anyhow!("model.provider: {e}"))?;
+    }
+    boxing_providers::resolve(&config, env_path).map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+fn bool_from_config_or_env(
+    config: &boxing_config::ConfigDoc,
+    key: &str,
+    env_key: &str,
+    default: bool,
+) -> bool {
+    if let Ok(value) = std::env::var(env_key) {
+        return parse_bool(&value).unwrap_or(default);
+    }
+    config
+        .get(key)
+        .ok()
+        .and_then(|v| parse_bool(&v))
+        .unwrap_or(default)
+}
+
+fn parse_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Some(true),
+        "0" | "false" | "no" | "n" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+struct LocalVoiceTranscriptHandler {
+    model: Option<String>,
+    provider: Option<String>,
+    system: Option<String>,
+    max_tokens: u32,
+    max_turns: usize,
+    auto_tts: bool,
+}
+
+impl boxing_voice::server::TranscriptHandler for LocalVoiceTranscriptHandler {
+    fn handle(
+        &self,
+        _session_id: String,
+        transcript: String,
+    ) -> Pin<Box<dyn Future<Output = Result<boxing_voice::server::VoiceAgentReply, String>> + Send>>
+    {
+        let model_override = self.model.clone();
+        let provider_override = self.provider.clone();
+        let system_override = self.system.clone();
+        let max_tokens = self.max_tokens;
+        let max_turns = self.max_turns;
+        let auto_tts = self.auto_tts;
+        Box::pin(async move {
+            let config_path = boxing_config::config_path().map_err(|e| e.to_string())?;
+            let env_path = boxing_config::env_path().map_err(|e| e.to_string())?;
+            let config = boxing_config::load(&config_path).map_err(|e| e.to_string())?;
+            let provider = Arc::from(
+                resolve_provider(&config, &env_path, provider_override.as_deref())
+                    .map_err(|e| e.to_string())?,
+            );
+            let model = match model_override {
+                Some(model) => model,
+                None => config
+                    .get("model.default")
+                    .map_err(|e| format!("model.default: {e}"))?,
+            };
+            let system = system_override.unwrap_or_else(|| DEFAULT_SYSTEM.to_string());
+            let tools = agent_tools(
+                Arc::clone(&provider),
+                &model,
+                &system,
+                max_turns,
+                max_tokens,
+                &config,
+            )
+            .into_iter()
+            .filter(|tool| tool.name() != "text_to_speech")
+            .collect();
+            let mut agent =
+                boxing_core::Agent::new(provider, model, system, tools, max_turns, max_tokens);
+
+            let hermes_home = boxing_config::hermes_home().map_err(|e| e.to_string())?;
+            let memory_injector = boxing_core::MemoryInjector::load(&hermes_home);
+            agent = agent.with_memory(memory_injector);
+            if let Ok(store) = boxing_state::SessionStore::open(
+                &boxing_config::state_db_path().map_err(|e| e.to_string())?,
+            ) {
+                agent = agent.with_store(store);
+            }
+
+            let mut reply_text = String::new();
+            let mut noop_event = |_event: boxing_core::LoopEvent| {};
+            let final_text = agent
+                .run(
+                    &transcript,
+                    &mut |delta| reply_text.push_str(delta),
+                    &mut noop_event,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            if reply_text.trim().is_empty() {
+                reply_text = final_text;
+            }
+
+            let mut reply = boxing_voice::server::VoiceAgentReply {
+                text: reply_text,
+                media: None,
+                file_path: None,
+                tts_error: None,
+            };
+
+            if auto_tts && !reply.text.trim().is_empty() {
+                use boxing_tools::Tool as _;
+
+                let tts = boxing_tools::TextToSpeech::new(hermes_home);
+                match tts
+                    .exec(serde_json::json!({
+                        "text": reply.text,
+                    }))
+                    .await
+                {
+                    Ok(raw) => {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            reply.media = value
+                                .get("media")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string);
+                            reply.file_path = value
+                                .get("file_path")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string);
+                        }
+                    }
+                    Err(error) => reply.tts_error = Some(error.to_string()),
+                }
+            }
+
+            Ok(reply)
+        })
+    }
+}
+
 /// 启动语音运行时 HTTP 服务。
-async fn run_voice() -> anyhow::Result<()> {
+async fn run_voice(
+    model: Option<String>,
+    provider: Option<String>,
+    system: Option<String>,
+    max_tokens: u32,
+    max_turns: usize,
+) -> anyhow::Result<()> {
     let config = boxing_voice::VoiceConfig::from_env()?;
+    let config_doc = boxing_config::load_or_default(&boxing_config::config_path()?)?;
+    let auto_tts = bool_from_config_or_env(
+        &config_doc,
+        "voice.auto_tts",
+        "QXZN_VOICE_RUNTIME_AUTO_TTS",
+        false,
+    );
     let runtime = std::sync::Arc::new(boxing_voice::VoiceRuntime::new());
     let (events, _) = tokio::sync::broadcast::channel(128);
     let state = boxing_voice::server::AppState {
         config: std::sync::Arc::new(config),
         runtime,
         events,
+        transcript_handler: Some(std::sync::Arc::new(LocalVoiceTranscriptHandler {
+            model,
+            provider,
+            system,
+            max_tokens,
+            max_turns,
+            auto_tts,
+        })),
     };
-    eprintln!("boxing-agent voice runtime starting...");
+    eprintln!(
+        "boxing-agent voice runtime starting... agent=on auto_tts={}",
+        if auto_tts { "on" } else { "off" }
+    );
     boxing_voice::server::serve(state).await
 }
 

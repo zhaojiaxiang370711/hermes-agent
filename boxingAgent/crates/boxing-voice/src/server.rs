@@ -10,6 +10,8 @@
 //! - POST /api/v1/voice-runtime/reset — 重置状态
 
 use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -32,6 +34,25 @@ pub struct AppState {
     pub config: Arc<VoiceConfig>,
     pub runtime: Arc<VoiceRuntime>,
     pub events: broadcast::Sender<VoiceEvent>,
+    pub transcript_handler: Option<Arc<dyn TranscriptHandler>>,
+}
+
+/// Result returned by the agent side of the voice loop.
+#[derive(Debug, Clone)]
+pub struct VoiceAgentReply {
+    pub text: String,
+    pub media: Option<String>,
+    pub file_path: Option<String>,
+    pub tts_error: Option<String>,
+}
+
+/// Hook provided by the CLI binary so boxing-voice stays transport-only.
+pub trait TranscriptHandler: Send + Sync {
+    fn handle(
+        &self,
+        session_id: String,
+        transcript: String,
+    ) -> Pin<Box<dyn Future<Output = Result<VoiceAgentReply, String>> + Send>>;
 }
 
 #[derive(Debug, Serialize)]
@@ -263,6 +284,7 @@ async fn ingest_pcm(
                 event.transcript = Some(text.clone());
                 event.final_result = true;
                 publish(&state, event);
+                spawn_transcript_handler(state.clone(), session_id, text.clone());
             }
         } else {
             let mut event = make_event(
@@ -336,6 +358,9 @@ async fn simulate_transcript(
     event.final_result = request.final_result;
     publish(&state, event.clone());
     state.runtime.set_phase(final_phase).await;
+    if request.final_result {
+        spawn_transcript_handler(state.clone(), event.session_id.clone(), text.to_string());
+    }
     Ok(Json(event))
 }
 
@@ -350,4 +375,61 @@ async fn reset(State(state): State<AppState>) -> Json<VoiceEvent> {
 fn publish(state: &AppState, event: VoiceEvent) {
     state.runtime.mark_event();
     let _ = state.events.send(event);
+}
+
+fn spawn_transcript_handler(state: AppState, session_id: Option<String>, transcript: String) {
+    let Some(handler) = state.transcript_handler.clone() else {
+        return;
+    };
+    if transcript.trim().is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        let session_id = match session_id {
+            Some(id) => id,
+            None => state.runtime.start_session().await,
+        };
+
+        state.runtime.set_phase(VoicePhase::Responding).await;
+        let mut start = make_event(
+            &state.runtime,
+            "assistant_start",
+            Some(session_id.clone()),
+            VoicePhase::Responding,
+        );
+        start.message = Some("agent processing transcript".into());
+        publish(&state, start);
+
+        match handler.handle(session_id.clone(), transcript).await {
+            Ok(reply) => {
+                let phase = if reply.media.is_some() {
+                    VoicePhase::Speaking
+                } else {
+                    VoicePhase::Completed
+                };
+                state.runtime.set_phase(phase).await;
+                let mut event =
+                    make_event(&state.runtime, "assistant_reply", Some(session_id), phase);
+                event.assistant_text = Some(reply.text);
+                event.media = reply.media;
+                event.file_path = reply.file_path;
+                event.final_result = true;
+                event.message = reply.tts_error.map(|e| format!("tts failed: {e}"));
+                publish(&state, event);
+                state.runtime.set_phase(VoicePhase::Completed).await;
+            }
+            Err(error) => {
+                state.runtime.set_phase(VoicePhase::Completed).await;
+                let mut event = make_event(
+                    &state.runtime,
+                    "assistant_error",
+                    Some(session_id),
+                    VoicePhase::Completed,
+                );
+                event.message = Some(error);
+                event.final_result = true;
+                publish(&state, event);
+            }
+        }
+    });
 }
