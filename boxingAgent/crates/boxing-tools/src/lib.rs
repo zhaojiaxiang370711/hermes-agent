@@ -57,7 +57,7 @@ pub fn default_tools() -> Vec<Box<dyn Tool>> {
         Box::new(Vision),
         Box::new(WebSearch),
         Box::new(ImageGenerate::new()),
-        Box::new(TextToSpeech),
+        Box::new(TextToSpeech::new(home.clone())),
         Box::new(ExecuteCode::new(vec![
             "read_file".into(),
             "write_file".into(),
