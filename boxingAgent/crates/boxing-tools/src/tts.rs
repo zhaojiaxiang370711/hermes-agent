@@ -184,4 +184,43 @@ mod tests {
         let voice = read_tts_voice();
         assert!(!voice.is_empty());
     }
+
+    /// Live smoke：真实调用 edge-tts CLI（需联网 + 已安装 edge-tts）。
+    /// 默认不跑，用 `cargo test live_edge_tts_smoke -- --ignored` 触发。
+    #[tokio::test]
+    #[ignore = "live smoke: 需联网 + 已安装 edge-tts CLI"]
+    async fn live_edge_tts_smoke() {
+        let out_path = std::env::temp_dir().join(format!(
+            "boxing-tts-smoke-{}.mp3",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let out = TextToSpeech
+            .exec(json!({
+                "text": "Hello. This is a text to speech smoke test from the boxing-agent Rust port.",
+                "output_path": out_path.to_string_lossy(),
+            }))
+            .await
+            .expect("text_to_speech exec failed");
+
+        // 返回 JSON 带 MEDIA: 标签
+        assert!(out.contains("MEDIA:"), "missing MEDIA tag in: {out}");
+        assert!(out_path.exists(), "mp3 未生成: {out_path:?}");
+
+        let bytes = std::fs::read(&out_path).expect("读取 mp3");
+        assert!(bytes.len() > 1000, "mp3 过小: {} bytes", bytes.len());
+        // MP3 校验：ID3v2 头 或 帧同步 0xFF{E0}
+        let is_mp3 = bytes.starts_with(b"ID3")
+            || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0);
+        assert!(
+            is_mp3,
+            "非 mp3 流 (head={:02x?})",
+            &bytes[..2.min(bytes.len())]
+        );
+
+        eprintln!("smoke ok: {} bytes @ {out_path:?}", bytes.len());
+        let _ = std::fs::remove_file(&out_path);
+    }
 }
