@@ -3,6 +3,9 @@
 </p>
 
 # Hermes Agent ☤
+
+This fork's [Huahuo character extension](huahuo_character/README.md) adds scoped character dialogue and an optional Godot semantic-action bridge. Its current stage and validation limits are documented separately from upstream Hermes features.
+
 <p align="center">
   <a href="https://hermes-agent.nousresearch.com/">Hermes Agent</a> | <a href="https://hermes-agent.nousresearch.com/">Hermes Desktop</a>
 </p>

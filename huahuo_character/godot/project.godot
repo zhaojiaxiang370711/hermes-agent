@@ -1,0 +1,10 @@
+; Standalone contract-test project. No live-game scene, model, camera or network.
+config_version=5
+
+[application]
+config/name="Huahuo Character Action Bridge Tests"
+config/features=PackedStringArray("4.0", "GL Compatibility")
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
