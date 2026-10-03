@@ -211,11 +211,12 @@ class Director:
                 target = self._character(reply.target_character_id)
                 if target.character_id == spec.character_id:
                     raise ProtocolError("a character cannot relay to itself")
-            utterances.append(Utterance(spec.character_id, reply.text))
+            action_request_id = str(uuid4()) if reply.action is not None else None
+            utterances.append(Utterance(spec.character_id, reply.text, action_request_id))
             if reply.action is not None:
                 actions.append(
                     ActionEvent(
-                        request_id=str(uuid4()),
+                        request_id=action_request_id,
                         character_id=spec.character_id,
                         conversation_id=scoped_conversation,
                         turn_id=turn_id,

@@ -100,9 +100,19 @@ class AgentReply:
 class Utterance:
     character_id: str
     text: str
+    action_request_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.character_id, "character_id")
+        validate_text(self.text)
+        if self.action_request_id is not None:
+            validate_identifier(self.action_request_id, "action_request_id")
 
     def to_dict(self) -> dict[str, str]:
-        return {"character_id": self.character_id, "text": self.text}
+        payload = {"character_id": self.character_id, "text": self.text}
+        if self.action_request_id is not None:
+            payload["action_request_id"] = self.action_request_id
+        return payload
 
 
 @dataclass(frozen=True)

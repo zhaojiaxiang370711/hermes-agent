@@ -143,6 +143,7 @@ class DirectorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["turn_id"], result.turn_id)
             self.assertEqual(payload["type"], "character.action")
             self.assertEqual(payload["schema"], "huahuo.character.action.v1")
+            self.assertEqual(utterance.action_request_id, action.request_id)
             self.assertEqual(type(payload["turn_id"]), int)
             self.assertNotIn("priority", payload)
             self.assertNotIn("resource_path", payload)
@@ -186,6 +187,35 @@ class DirectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(backend.calls), 3)
         self.assertEqual(len(result.actions), 3)
         self.assertEqual(backend.calls[0][1], backend.calls[2][1])
+
+    async def test_repeated_speaker_without_action_does_not_steal_later_action(self):
+        class SequenceBackend:
+            def __init__(self, replies):
+                self.replies = iter(replies)
+
+            async def respond(self, spec, session_id, text):
+                return next(self.replies)
+
+        for first_action, last_action in ((None, "greet"), ("think", None)):
+            with self.subTest(first_action=first_action, last_action=last_action):
+                backend = SequenceBackend([
+                    AgentReply("Alpha first", first_action, "beta"),
+                    AgentReply("Beta replies", "explain", "alpha"),
+                    AgentReply("Alpha last", last_action),
+                ])
+                result = await Director(characters(), backend, max_interactions=2).respond(
+                    "alpha", "user-one", "Discuss"
+                )
+                actions = {action.request_id: action for action in result.actions}
+                for utterance, expected in zip(result.utterances, (first_action, "explain", last_action)):
+                    if expected is None:
+                        self.assertIsNone(utterance.action_request_id)
+                        self.assertNotIn("action_request_id", utterance.to_dict())
+                    else:
+                        linked = actions[utterance.action_request_id]
+                        self.assertEqual(linked.action, expected)
+                        self.assertEqual(linked.character_id, utterance.character_id)
+                        self.assertEqual(len(linked.to_dict()), 7)
 
     async def test_large_public_reply_has_bounded_valid_json_relay(self):
         public_text = "\x00" * MAX_TEXT_CHARS
